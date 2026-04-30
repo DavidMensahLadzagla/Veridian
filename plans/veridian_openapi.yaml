@@ -1,0 +1,3899 @@
+openapi: 3.1.0
+
+info:
+  title: Veridian API
+  version: 1.0.0
+  description: |
+    The Veridian REST API powers all client applications — Flutter mobile and Next.js web.
+
+    ## Authentication
+    All protected endpoints require a Bearer JWT access token in the Authorization header:
+    ```
+    Authorization: Bearer <access_token>
+    ```
+    Access tokens expire after **15 minutes**. Use `POST /auth/token/refresh` with a valid
+    refresh token (HttpOnly cookie on web; secure storage on mobile) to obtain a new pair.
+
+    ## Versioning
+    All endpoints are prefixed with `/api/v1/`. Breaking changes increment the version.
+
+    ## Pagination
+    List endpoints use cursor-based pagination unless noted otherwise.
+    Response shape:
+    ```json
+    {
+      "results": [...],
+      "next_cursor": "opaque-string-or-null",
+      "previous_cursor": "opaque-string-or-null",
+      "count": 120
+    }
+    ```
+
+    ## Error Format
+    All errors return a consistent envelope:
+    ```json
+    {
+      "error": {
+        "code": "SLOT_UNAVAILABLE",
+        "message": "This slot is no longer available.",
+        "field_errors": { "slot_id": ["Slot has already been booked."] },
+        "request_id": "uuid"
+      }
+    }
+    ```
+
+    ## Currency
+    All monetary values in API responses are returned as objects:
+    ```json
+    { "amount": 15000, "currency_code": "GHS", "formatted": "GHS 150.00" }
+    ```
+    `amount` is always in minor units (pesewas for GHS, cents for USD).
+
+    ## Dates & Times
+    All timestamps are ISO 8601 UTC strings. Dates are `YYYY-MM-DD`.
+    Clients are responsible for converting to local timezone using the user's `timezone` field.
+
+  contact:
+    name: Davinix Software Solutions
+    email: dev@davinix.com
+
+servers:
+  - url: https://api.Veridian.app/api/v1
+    description: Production
+  - url: https://staging-api.Veridian.app/api/v1
+    description: Staging
+  - url: http://localhost:8000/api/v1
+    description: Local development
+
+# ============================================================
+# SECURITY SCHEMES
+# = ===========================================================
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  # ============================================================
+  # REUSABLE SCHEMAS
+  # ============================================================
+  schemas:
+    # --- Primitives ---
+
+    UUID:
+      type: string
+      format: uuid
+      example: "550e8400-e29b-41d4-a716-446655440000"
+
+    MoneyAmount:
+      type: object
+      required: [amount, currency_code, formatted]
+      properties:
+        amount:
+          type: integer
+          description: Value in minor units (pesewas, cents)
+          example: 15000
+        currency_code:
+          type: string
+          minLength: 3
+          maxLength: 3
+          example: "GHS"
+        formatted:
+          type: string
+          description: Human-readable string for display
+          example: "GHS 150.00"
+
+    PaginatedResponse:
+      type: object
+      required: [results, count]
+      properties:
+        results:
+          type: array
+          items: {}
+        next_cursor:
+          type: string
+          nullable: true
+        previous_cursor:
+          type: string
+          nullable: true
+        count:
+          type: integer
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code:
+              type: string
+              example: "SLOT_UNAVAILABLE"
+            message:
+              type: string
+              example: "This slot is no longer available."
+            field_errors:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  type: string
+              nullable: true
+              example: { "slot_id": ["Slot has already been booked."] }
+            request_id:
+              type: string
+              format: uuid
+
+    # --- Enums ---
+
+    UserRole:
+      type: string
+      enum: [patient, doctor, clinic_admin, platform_admin]
+
+    VerificationStatus:
+      type: string
+      enum: [unverified, pending_review, verified, rejected, suspended]
+
+    BookingMode:
+      type: string
+      enum: [in_person, telehealth, either]
+
+    AppointmentStatus:
+      type: string
+      enum:
+        - requested
+        - confirmed
+        - in_progress
+        - completed
+        - cancelled_by_patient
+        - cancelled_by_doctor
+        - cancelled_by_platform
+        - no_show_patient
+        - no_show_doctor
+
+    SlotStatus:
+      type: string
+      enum: [available, reserved, booked, blocked, expired]
+
+    Gender:
+      type: string
+      enum: [male, female, non_binary, prefer_not_to_say]
+
+    TimelineEntryType:
+      type: string
+      enum:
+        - symptom_log
+        - diagnosis_note
+        - prescription
+        - lab_result
+        - patient_note
+        - vaccination
+        - allergy_record
+
+    TimelineVisibility:
+      type: string
+      enum:
+        - patient_only
+        - shared_with_current_doctor
+        - shared_with_all_future_doctors
+
+    ConsentScope:
+      type: string
+      enum: [read_timeline, read_prescriptions, read_lab_results, read_all]
+
+    PaymentProvider:
+      type: string
+      enum: [paystack, stripe, cash]
+
+    PaymentStatus:
+      type: string
+      enum:
+        - pending
+        - authorized
+        - captured
+        - failed
+        - refunded
+        - partially_refunded
+        - disputed
+
+    NotificationChannel:
+      type: string
+      enum: [push, sms, email, in_app]
+
+    DayOfWeek:
+      type: string
+      enum: [monday, tuesday, wednesday, thursday, friday, saturday, sunday]
+
+    # --- Core Objects ---
+
+    UserPublic:
+      description: Minimal user info safe to expose publicly
+      type: object
+      required: [id, full_name, avatar_url, role]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        full_name:
+          type: string
+          example: "Kwame Mensah"
+        avatar_url:
+          type: string
+          format: uri
+          nullable: true
+        role:
+          $ref: "#/components/schemas/UserRole"
+
+    UserPrivate:
+      description: Full user object returned to the authenticated user
+      allOf:
+        - $ref: "#/components/schemas/UserPublic"
+        - type: object
+          required:
+            [
+              email,
+              phone,
+              phone_verified,
+              email_verified,
+              preferred_language,
+              timezone,
+              created_at,
+            ]
+          properties:
+            email:
+              type: string
+              format: email
+              nullable: true
+            phone:
+              type: string
+              nullable: true
+              example: "+233201234567"
+            phone_verified:
+              type: boolean
+            email_verified:
+              type: boolean
+            date_of_birth:
+              type: string
+              format: date
+              nullable: true
+            gender:
+              $ref: "#/components/schemas/Gender"
+              nullable: true
+            preferred_language:
+              type: string
+              example: "en"
+            timezone:
+              type: string
+              example: "Africa/Accra"
+            is_active:
+              type: boolean
+            last_login_at:
+              type: string
+              format: date-time
+              nullable: true
+            created_at:
+              type: string
+              format: date-time
+
+    PatientProfile:
+      type: object
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        user_id:
+          $ref: "#/components/schemas/UUID"
+        blood_group:
+          type: string
+          nullable: true
+          example: "O+"
+        genotype:
+          type: string
+          nullable: true
+          example: "AS"
+        height_cm:
+          type: number
+          nullable: true
+          example: 175.5
+        weight_kg:
+          type: number
+          nullable: true
+          example: 72.0
+        allergies:
+          type: array
+          items:
+            type: string
+          example: ["Penicillin", "Peanuts"]
+        chronic_conditions:
+          type: array
+          items:
+            type: string
+          example: ["Hypertension"]
+        emergency_contact_name:
+          type: string
+          nullable: true
+        emergency_contact_phone:
+          type: string
+          nullable: true
+        emergency_contact_relation:
+          type: string
+          nullable: true
+        insurance_provider:
+          type: string
+          nullable: true
+        insurance_number:
+          type: string
+          nullable: true
+
+    Specialization:
+      type: object
+      required: [id, name, slug, is_active]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        name:
+          type: string
+          example: "Cardiology"
+        slug:
+          type: string
+          example: "cardiology"
+        parent_id:
+          $ref: "#/components/schemas/UUID"
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        is_active:
+          type: boolean
+
+    Clinic:
+      type: object
+      required:
+        [id, name, slug, city, country_code, is_active, verification_status]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        name:
+          type: string
+          example: "Korle Bu Teaching Hospital"
+        slug:
+          type: string
+          example: "korle-bu-teaching-hospital"
+        description:
+          type: string
+          nullable: true
+        address_line1:
+          type: string
+          nullable: true
+        address_line2:
+          type: string
+          nullable: true
+        city:
+          type: string
+          example: "Accra"
+        region:
+          type: string
+          nullable: true
+          example: "Greater Accra"
+        country_code:
+          type: string
+          example: "GH"
+        phone:
+          type: string
+          nullable: true
+        email:
+          type: string
+          nullable: true
+        website:
+          type: string
+          nullable: true
+        logo_url:
+          type: string
+          format: uri
+          nullable: true
+        photo_urls:
+          type: array
+          items:
+            type: string
+            format: uri
+        coordinates:
+          type: object
+          nullable: true
+          properties:
+            latitude:
+              type: number
+              example: 5.5502
+            longitude:
+              type: number
+              example: -0.2174
+        is_active:
+          type: boolean
+        verification_status:
+          $ref: "#/components/schemas/VerificationStatus"
+
+    DoctorLanguage:
+      type: object
+      required: [language_code, proficiency]
+      properties:
+        language_code:
+          type: string
+          example: "tw"
+        proficiency:
+          type: string
+          enum: [basic, conversational, fluent, native]
+          example: "native"
+
+    DoctorQualification:
+      type: object
+      required: [degree, institution, country_code]
+      properties:
+        degree:
+          type: string
+          example: "MBChB"
+        institution:
+          type: string
+          example: "University of Ghana Medical School"
+        country_code:
+          type: string
+          example: "GH"
+        year_obtained:
+          type: integer
+          nullable: true
+          example: 2015
+
+    ClinicAffiliationSummary:
+      type: object
+      required:
+        [
+          clinic,
+          consulting_room,
+          is_primary_clinic,
+          consultation_fee,
+          booking_mode,
+        ]
+      properties:
+        clinic:
+          $ref: "#/components/schemas/Clinic"
+        consulting_room:
+          type: string
+          nullable: true
+          example: "Room 4B"
+        is_primary_clinic:
+          type: boolean
+        consultation_fee:
+          $ref: "#/components/schemas/MoneyAmount"
+        telehealth_fee:
+          $ref: "#/components/schemas/MoneyAmount"
+          nullable: true
+
+    DoctorProfileSummary:
+      description: Lightweight doctor card for search results and lists
+      type: object
+      required:
+        [
+          id,
+          user,
+          specializations,
+          rating_avg,
+          rating_count,
+          is_profile_active,
+          verification_status,
+        ]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        user:
+          $ref: "#/components/schemas/UserPublic"
+        primary_specialization:
+          $ref: "#/components/schemas/Specialization"
+          nullable: true
+        specializations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Specialization"
+        languages:
+          type: array
+          items:
+            $ref: "#/components/schemas/DoctorLanguage"
+        primary_clinic:
+          $ref: "#/components/schemas/ClinicAffiliationSummary"
+          nullable: true
+        rating_avg:
+          type: number
+          example: 4.7
+        rating_count:
+          type: integer
+          example: 134
+        slot_confidence_score:
+          type: number
+          example: 0.92
+        accepts_new_patients:
+          type: boolean
+        is_profile_active:
+          type: boolean
+        verification_status:
+          $ref: "#/components/schemas/VerificationStatus"
+        next_available_slot:
+          description: Earliest available slot within the next 30 days
+          type: object
+          nullable: true
+          properties:
+            slot_id:
+              $ref: "#/components/schemas/UUID"
+            slot_date:
+              type: string
+              format: date
+            start_time:
+              type: string
+              format: time
+            booking_mode:
+              $ref: "#/components/schemas/BookingMode"
+
+    DoctorProfileFull:
+      description: Complete doctor profile for the doctor detail page
+      allOf:
+        - $ref: "#/components/schemas/DoctorProfileSummary"
+        - type: object
+          properties:
+            bio:
+              type: string
+              nullable: true
+            years_of_experience:
+              type: integer
+              nullable: true
+            license_number:
+              type: string
+              nullable: true
+            license_issuing_council:
+              type: string
+              nullable: true
+            qualifications:
+              type: array
+              items:
+                $ref: "#/components/schemas/DoctorQualification"
+            clinic_affiliations:
+              type: array
+              items:
+                $ref: "#/components/schemas/ClinicAffiliationSummary"
+            rating_punctuality_avg:
+              type: number
+            rating_communication_avg:
+              type: number
+            rating_medical_avg:
+              type: number
+            profile_views:
+              type: integer
+            response_rate_pct:
+              type: integer
+            profile_completeness_pct:
+              type: integer
+
+    Slot:
+      type: object
+      required:
+        [
+          id,
+          slot_date,
+          start_time,
+          end_time,
+          booking_mode,
+          status,
+          confidence_score,
+        ]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        doctor_profile_id:
+          $ref: "#/components/schemas/UUID"
+        slot_date:
+          type: string
+          format: date
+          example: "2025-06-15"
+        start_time:
+          type: string
+          format: time
+          example: "09:00:00"
+        end_time:
+          type: string
+          format: time
+          example: "09:30:00"
+        booking_mode:
+          $ref: "#/components/schemas/BookingMode"
+        status:
+          $ref: "#/components/schemas/SlotStatus"
+        confidence_score:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.95
+        reservation_expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Present only when status = reserved and requester owns the reservation
+
+    PreConsultationField:
+      type: object
+      required: [id, label, type, required]
+      properties:
+        id:
+          type: string
+          format: uuid
+        label:
+          type: string
+          example: "What is your main reason for visiting today?"
+        type:
+          type: string
+          enum:
+            [text, textarea, select, multi_select, boolean, number, date, file]
+        required:
+          type: boolean
+        placeholder:
+          type: string
+          nullable: true
+        options:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: Only present for select and multi_select types
+        max_length:
+          type: integer
+          nullable: true
+        conditional_on_field_id:
+          type: string
+          format: uuid
+          nullable: true
+        conditional_on_value:
+          nullable: true
+          description: Show this field only when the referenced field equals this value
+
+    AppointmentSummary:
+      type: object
+      required:
+        [id, status, booking_mode, slot, doctor, consultation_fee, created_at]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        status:
+          $ref: "#/components/schemas/AppointmentStatus"
+        booking_mode:
+          $ref: "#/components/schemas/BookingMode"
+        slot:
+          $ref: "#/components/schemas/Slot"
+        doctor:
+          $ref: "#/components/schemas/DoctorProfileSummary"
+        clinic:
+          $ref: "#/components/schemas/Clinic"
+          nullable: true
+        consultation_fee:
+          $ref: "#/components/schemas/MoneyAmount"
+        payment_status:
+          $ref: "#/components/schemas/PaymentStatus"
+          nullable: true
+        estimated_wait_minutes:
+          type: integer
+          nullable: true
+        actual_start_time:
+          type: string
+          format: date-time
+          nullable: true
+        actual_end_time:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        cancelled_at:
+          type: string
+          format: date-time
+          nullable: true
+        cancellation_reason:
+          type: string
+          nullable: true
+
+    AppointmentFull:
+      description: Full appointment detail including pre-consultation and telehealth
+      allOf:
+        - $ref: "#/components/schemas/AppointmentSummary"
+        - type: object
+          properties:
+            patient:
+              $ref: "#/components/schemas/UserPublic"
+            pre_consultation_responses:
+              type: object
+              additionalProperties: true
+              description: Map of field_id → patient answer
+            patient_notes:
+              type: string
+              nullable: true
+            form_template:
+              type: object
+              nullable: true
+              properties:
+                id:
+                  $ref: "#/components/schemas/UUID"
+                name:
+                  type: string
+                fields:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/PreConsultationField"
+            telehealth_patient_url:
+              type: string
+              format: uri
+              nullable: true
+              description: Only present within 15 minutes of appointment start time
+            follow_up_recommended:
+              type: boolean
+              nullable: true
+            follow_up_notes:
+              type: string
+              nullable: true
+            follow_up_appointment_id:
+              $ref: "#/components/schemas/UUID"
+              nullable: true
+            status_history:
+              type: array
+              items:
+                type: object
+                properties:
+                  from_status:
+                    $ref: "#/components/schemas/AppointmentStatus"
+                    nullable: true
+                  to_status:
+                    $ref: "#/components/schemas/AppointmentStatus"
+                  actor_role:
+                    $ref: "#/components/schemas/UserRole"
+                  reason:
+                    type: string
+                    nullable: true
+                  created_at:
+                    type: string
+                    format: date-time
+
+    HealthTimelineEntry:
+      type: object
+      required: [id, entry_type, authored_by, visibility, created_at]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        appointment_id:
+          $ref: "#/components/schemas/UUID"
+          nullable: true
+        authored_by:
+          $ref: "#/components/schemas/UserPublic"
+        entry_type:
+          $ref: "#/components/schemas/TimelineEntryType"
+        title:
+          type: string
+          nullable: true
+        content:
+          type: object
+          description: Decrypted content payload (see schema in Document 1)
+          additionalProperties: true
+        visibility:
+          $ref: "#/components/schemas/TimelineVisibility"
+        attachment_urls:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: Signed Supabase Storage URLs (valid 1 hour)
+        icd10_codes:
+          type: array
+          items:
+            type: string
+          nullable: true
+        is_pinned:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    Review:
+      type: object
+      required:
+        [
+          id,
+          rating_overall,
+          rating_punctuality,
+          rating_communication,
+          rating_medical,
+          status,
+          created_at,
+        ]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        appointment_id:
+          $ref: "#/components/schemas/UUID"
+        patient:
+          $ref: "#/components/schemas/UserPublic"
+          description: Null if is_anonymous = true
+          nullable: true
+        rating_overall:
+          type: integer
+          minimum: 1
+          maximum: 5
+        rating_punctuality:
+          type: integer
+          minimum: 1
+          maximum: 5
+        rating_communication:
+          type: integer
+          minimum: 1
+          maximum: 5
+        rating_medical:
+          type: integer
+          minimum: 1
+          maximum: 5
+        review_text:
+          type: string
+          nullable: true
+        doctor_reply:
+          type: string
+          nullable: true
+        doctor_replied_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_anonymous:
+          type: boolean
+        status:
+          $ref: "#/components/schemas/ReviewStatus"
+        created_at:
+          type: string
+          format: date-time
+
+    ReviewStatus:
+      type: string
+      enum: [pending, published, flagged, removed]
+
+    AvailabilityTemplate:
+      type: object
+      required:
+        [
+          id,
+          day_of_week,
+          start_time,
+          end_time,
+          slot_duration_minutes,
+          booking_mode,
+          is_active,
+        ]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        clinic_affiliation_id:
+          $ref: "#/components/schemas/UUID"
+          nullable: true
+        clinic_name:
+          type: string
+          nullable: true
+        day_of_week:
+          $ref: "#/components/schemas/DayOfWeek"
+        start_time:
+          type: string
+          format: time
+          example: "08:00:00"
+        end_time:
+          type: string
+          format: time
+          example: "17:00:00"
+        slot_duration_minutes:
+          type: integer
+          enum: [15, 20, 30, 45, 60]
+        booking_mode:
+          $ref: "#/components/schemas/BookingMode"
+        buffer_minutes:
+          type: integer
+          example: 5
+        is_active:
+          type: boolean
+        effective_from:
+          type: string
+          format: date
+        effective_until:
+          type: string
+          format: date
+          nullable: true
+
+    PaymentTransaction:
+      type: object
+      required: [id, provider, amount, currency_code, status, created_at]
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        appointment_id:
+          $ref: "#/components/schemas/UUID"
+          nullable: true
+        provider:
+          $ref: "#/components/schemas/PaymentProvider"
+        provider_reference:
+          type: string
+          nullable: true
+        amount:
+          $ref: "#/components/schemas/MoneyAmount"
+        status:
+          $ref: "#/components/schemas/PaymentStatus"
+        refunded_amount:
+          $ref: "#/components/schemas/MoneyAmount"
+          nullable: true
+        refund_reason:
+          type: string
+          nullable: true
+        captured_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    NotificationPreference:
+      type: object
+      required: [event_category, channel, is_enabled]
+      properties:
+        event_category:
+          type: string
+          example: "appointment_reminders"
+        channel:
+          $ref: "#/components/schemas/NotificationChannel"
+        is_enabled:
+          type: boolean
+
+  # ============================================================
+  # REUSABLE PARAMETERS
+  # ============================================================
+  parameters:
+    CursorParam:
+      name: cursor
+      in: query
+      schema:
+        type: string
+      description: Opaque cursor for pagination
+
+    PageSizeParam:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+    UUIDPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/UUID"
+
+  # ============================================================
+  # REUSABLE RESPONSES
+  # ============================================================
+  responses:
+    400BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "VALIDATION_ERROR"
+              message: "Request validation failed."
+              field_errors:
+                phone: ["Enter a valid phone number in E.164 format."]
+              request_id: "550e8400-e29b-41d4-a716-446655440000"
+
+    401Unauthorized:
+      description: Missing or invalid authentication token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "AUTHENTICATION_REQUIRED"
+              message: "Authentication credentials were not provided or are invalid."
+              request_id: "550e8400-e29b-41d4-a716-446655440000"
+
+    403Forbidden:
+      description: Authenticated but not authorized for this action
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "PERMISSION_DENIED"
+              message: "You do not have permission to perform this action."
+              request_id: "550e8400-e29b-41d4-a716-446655440000"
+
+    404NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "NOT_FOUND"
+              message: "The requested resource was not found."
+              request_id: "550e8400-e29b-41d4-a716-446655440000"
+
+    409Conflict:
+      description: Resource state conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+    429TooManyRequests:
+      description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: "RATE_LIMIT_EXCEEDED"
+              message: "Too many requests. Please try again later."
+              request_id: "550e8400-e29b-41d4-a716-446655440000"
+
+# ============================================================
+# GLOBAL SECURITY (override per-endpoint where public)
+# ============================================================
+security:
+  - BearerAuth: []
+
+# ============================================================
+# TAGS (groups endpoints in docs)
+# ============================================================
+tags:
+  - name: Auth
+    description: Registration, login, token management, OTP
+  - name: Users
+    description: User profile management
+  - name: Doctors
+    description: Doctor profiles, search, and discovery
+  - name: Clinics
+    description: Clinic management
+  - name: Availability
+    description: Doctor availability templates and slot management
+  - name: Appointments
+    description: Booking, management, and lifecycle
+  - name: Health Records
+    description: Patient health timeline and consent
+  - name: Payments
+    description: Payment initiation, webhooks, and history
+  - name: Notifications
+    description: Notification preferences and history
+  - name: Reviews
+    description: Post-appointment reviews and ratings
+  - name: Admin
+    description: Platform administration (platform_admin role only)
+
+# ============================================================
+# PATHS
+# ============================================================
+paths:
+  # ----------------------------------------------------------
+  # AUTH
+  # ----------------------------------------------------------
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user
+      description: |
+        Creates a new user account. After registration, an OTP is automatically sent
+        to the provided phone number. Email/password or phone/OTP auth are both supported.
+        The `role` must be one of: patient, doctor, clinic_admin.
+        Platform admins are created via the Django admin panel only.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [full_name, role, phone]
+              properties:
+                full_name:
+                  type: string
+                  minLength: 2
+                  maxLength: 200
+                  example: "Ama Owusu"
+                role:
+                  type: string
+                  enum: [patient, doctor, clinic_admin]
+                phone:
+                  type: string
+                  pattern: '^\+[1-9]\d{7,14}$'
+                  example: "+233201234567"
+                email:
+                  type: string
+                  format: email
+                  nullable: true
+                date_of_birth:
+                  type: string
+                  format: date
+                  nullable: true
+                preferred_language:
+                  type: string
+                  default: "en"
+                  example: "tw"
+      responses:
+        "201":
+          description: User created. OTP sent to phone.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user_id:
+                    $ref: "#/components/schemas/UUID"
+                  message:
+                    type: string
+                    example: "OTP sent to +233201234567. Verify to activate your account."
+                  otp_expires_in_seconds:
+                    type: integer
+                    example: 300
+        "400":
+          $ref: "#/components/responses/400BadRequest"
+        "409":
+          description: Phone or email already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "PHONE_ALREADY_EXISTS"
+                  message: "An account with this phone number already exists."
+
+  /auth/otp/verify:
+    post:
+      tags: [Auth]
+      summary: Verify OTP and activate account
+      description: |
+        Verifies the OTP sent during registration or login.
+        On success, returns access + refresh tokens.
+        Refresh token is set as an HttpOnly cookie on web clients.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone, otp]
+              properties:
+                phone:
+                  type: string
+                  example: "+233201234567"
+                otp:
+                  type: string
+                  minLength: 6
+                  maxLength: 6
+                  example: "481923"
+      responses:
+        "200":
+          description: OTP verified. Tokens issued.
+          headers:
+            Set-Cookie:
+              description: HttpOnly refresh token cookie (web clients)
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [access_token, user]
+                properties:
+                  access_token:
+                    type: string
+                    description: JWT access token (15 min expiry)
+                  refresh_token:
+                    type: string
+                    description: JWT refresh token (30 day expiry). Also set as HttpOnly cookie.
+                  token_type:
+                    type: string
+                    example: "Bearer"
+                  access_expires_in:
+                    type: integer
+                    example: 900
+                  user:
+                    $ref: "#/components/schemas/UserPrivate"
+        "400":
+          description: Invalid or expired OTP
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "OTP_INVALID"
+                  message: "The OTP is invalid or has expired."
+        "429":
+          $ref: "#/components/responses/429TooManyRequests"
+
+  /auth/otp/resend:
+    post:
+      tags: [Auth]
+      summary: Resend OTP
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone:
+                  type: string
+                  example: "+233201234567"
+      responses:
+        "200":
+          description: OTP resent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  otp_expires_in_seconds:
+                    type: integer
+        "429":
+          $ref: "#/components/responses/429TooManyRequests"
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login with phone — sends OTP
+      description: |
+        For existing users. Sends an OTP to the phone number.
+        Follow with `POST /auth/otp/verify` to receive tokens.
+        Rate limited to 5 attempts per phone number per hour.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                phone:
+                  type: string
+                  example: "+233201234567"
+      responses:
+        "200":
+          description: OTP sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  otp_expires_in_seconds:
+                    type: integer
+        "404":
+          description: No account found with this phone number
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "USER_NOT_FOUND"
+                  message: "No account found with this phone number."
+        "429":
+          $ref: "#/components/responses/429TooManyRequests"
+
+  /auth/social/{provider}:
+    post:
+      tags: [Auth]
+      summary: Authenticate via OAuth provider (Google, Apple)
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [google, apple]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id_token]
+              properties:
+                id_token:
+                  type: string
+                  description: Provider-issued ID token
+                role:
+                  type: string
+                  enum: [patient, doctor]
+                  description: Required only for new users (first login via this provider)
+      responses:
+        "200":
+          description: Existing user authenticated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  refresh_token:
+                    type: string
+                  user:
+                    $ref: "#/components/schemas/UserPrivate"
+                  is_new_user:
+                    type: boolean
+        "400":
+          $ref: "#/components/responses/400BadRequest"
+
+  /auth/token/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      description: |
+        Accepts refresh token via request body (mobile) or HttpOnly cookie (web).
+        Returns a new access token and rotates the refresh token.
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+                  description: Required for mobile clients. Web clients send via cookie.
+      responses:
+        "200":
+          description: New tokens issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  access_token:
+                    type: string
+                  refresh_token:
+                    type: string
+                  access_expires_in:
+                    type: integer
+        "401":
+          description: Invalid or expired refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "REFRESH_TOKEN_INVALID"
+                  message: "Refresh token is invalid or has expired. Please log in again."
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout — revoke refresh token
+      description: |
+        Adds the refresh token to the blocklist. Clears the HttpOnly cookie on web.
+        Mobile clients should also clear locally stored tokens.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+                  description: Required for mobile clients.
+      responses:
+        "204":
+          description: Logged out successfully
+
+  /auth/device-tokens:
+    post:
+      tags: [Auth]
+      summary: Register a device push token (FCM/APNS)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, platform]
+              properties:
+                token:
+                  type: string
+                platform:
+                  type: string
+                  enum: [ios, android, web]
+      responses:
+        "201":
+          description: Device token registered
+        "200":
+          description: Device token updated (already existed)
+
+  /auth/device-tokens/{token}:
+    delete:
+      tags: [Auth]
+      summary: Deregister a device push token
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Token removed
+
+  # ----------------------------------------------------------
+  # USERS
+  # ----------------------------------------------------------
+
+  /users/me:
+    get:
+      tags: [Users]
+      summary: Get authenticated user's profile
+      responses:
+        "200":
+          description: Current user's full profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPrivate"
+        "401":
+          $ref: "#/components/responses/401Unauthorized"
+
+    patch:
+      tags: [Users]
+      summary: Update authenticated user's profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name:
+                  type: string
+                date_of_birth:
+                  type: string
+                  format: date
+                gender:
+                  $ref: "#/components/schemas/Gender"
+                preferred_language:
+                  type: string
+                timezone:
+                  type: string
+                avatar_storage_key:
+                  type: string
+                  description: Supabase Storage key — client uploads directly to Supabase Storage and sends the key here
+      responses:
+        "200":
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPrivate"
+        "400":
+          $ref: "#/components/responses/400BadRequest"
+
+  /users/me/avatar-upload-url:
+    post:
+      tags: [Users]
+      summary: Get a pre-signed URL for avatar upload to Supabase Storage
+      description: |
+        Returns a short-lived signed upload URL. Client uploads directly to Supabase
+        Storage, then calls PATCH /users/me with the returned storage key.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upload_url:
+                    type: string
+                    format: uri
+                  storage_key:
+                    type: string
+                  expires_in_seconds:
+                    type: integer
+                    example: 300
+
+  /users/me/patient-profile:
+    get:
+      tags: [Users]
+      summary: Get patient health profile
+      description: Patients only.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PatientProfile"
+        "403":
+          $ref: "#/components/responses/403Forbidden"
+
+    put:
+      tags: [Users]
+      summary: Create or update patient health profile
+      description: Patients only. Full replacement (PUT semantics).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                blood_group:
+                  type: string
+                  nullable: true
+                genotype:
+                  type: string
+                  nullable: true
+                height_cm:
+                  type: number
+                  nullable: true
+                weight_kg:
+                  type: number
+                  nullable: true
+                allergies:
+                  type: array
+                  items:
+                    type: string
+                chronic_conditions:
+                  type: array
+                  items:
+                    type: string
+                emergency_contact_name:
+                  type: string
+                  nullable: true
+                emergency_contact_phone:
+                  type: string
+                  nullable: true
+                emergency_contact_relation:
+                  type: string
+                  nullable: true
+                insurance_provider:
+                  type: string
+                  nullable: true
+                insurance_number:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PatientProfile"
+
+  /users/me/change-phone:
+    post:
+      tags: [Users]
+      summary: Request a phone number change — sends OTP to new number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_phone]
+              properties:
+                new_phone:
+                  type: string
+                  example: "+233209876543"
+      responses:
+        "200":
+          description: OTP sent to new number
+        "409":
+          description: Phone already in use by another account
+
+  /users/me/change-phone/verify:
+    post:
+      tags: [Users]
+      summary: Confirm phone change with OTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_phone, otp]
+              properties:
+                new_phone:
+                  type: string
+                otp:
+                  type: string
+      responses:
+        "200":
+          description: Phone number updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPrivate"
+
+  /users/me/delete-account:
+    post:
+      tags: [Users]
+      summary: Request account deletion (30-day grace period)
+      description: |
+        Initiates soft delete. Account is deactivated immediately.
+        Hard delete occurs after 30 days unless the request is cancelled.
+        Health records are anonymized (not deleted) to meet retention requirements.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmation]
+              properties:
+                confirmation:
+                  type: string
+                  enum: ["DELETE MY ACCOUNT"]
+                  description: User must type this exact string to confirm
+                reason:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Deletion scheduled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  deletion_scheduled_at:
+                    type: string
+                    format: date-time
+
+  /users/me/export-data:
+    post:
+      tags: [Users]
+      summary: Request a full data export (GDPR)
+      description: |
+        Queues a background job. When complete, the user receives an email/notification
+        with a download link (valid 48 hours). The ZIP contains JSON files for all
+        personal data and a PDF of the health timeline.
+      responses:
+        "202":
+          description: Export job queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  estimated_completion_minutes:
+                    type: integer
+
+  # ----------------------------------------------------------
+  # DOCTORS — Discovery & Profiles
+  # ----------------------------------------------------------
+
+  /doctors:
+    get:
+      tags: [Doctors]
+      summary: Search and filter doctors
+      description: |
+        Core discovery endpoint. Supports structured filtering (Tier 1)
+        and optional semantic re-ranking when `query` param is provided (Tier 2).
+        Returns doctors with `verification_status = verified` and `is_profile_active = true` only.
+      security: []
+      parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+          description: Free-text semantic search. Triggers embedding-based re-ranking.
+          example: "skin doctor for children who speaks Twi"
+        - name: specialization_slug
+          in: query
+          schema:
+            type: string
+          example: "dermatology"
+        - name: city
+          in: query
+          schema:
+            type: string
+          example: "Accra"
+        - name: latitude
+          in: query
+          schema:
+            type: number
+          description: Patient latitude for proximity ranking
+        - name: longitude
+          in: query
+          schema:
+            type: number
+        - name: radius_km
+          in: query
+          schema:
+            type: number
+            default: 10
+        - name: language_code
+          in: query
+          schema:
+            type: string
+          example: "tw"
+        - name: gender
+          in: query
+          schema:
+            $ref: "#/components/schemas/Gender"
+        - name: booking_mode
+          in: query
+          schema:
+            $ref: "#/components/schemas/BookingMode"
+        - name: available_on
+          in: query
+          schema:
+            type: string
+            format: date
+          description: Filter to doctors with at least one available slot on this date
+        - name: max_fee
+          in: query
+          schema:
+            type: integer
+          description: Max consultation fee in minor units
+        - name: accepts_new_patients
+          in: query
+          schema:
+            type: boolean
+        - name: sort_by
+          in: query
+          schema:
+            type: string
+            enum: [relevance, rating, distance, fee_asc, fee_desc]
+            default: relevance
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          description: Paginated list of matching doctors
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedResponse"
+                  - type: object
+                    properties:
+                      results:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/DoctorProfileSummary"
+                      search_metadata:
+                        type: object
+                        properties:
+                          semantic_search_used:
+                            type: boolean
+                          total_matches:
+                            type: integer
+
+  /doctors/{id}:
+    get:
+      tags: [Doctors]
+      summary: Get full doctor profile
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "200":
+          description: Full doctor profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DoctorProfileFull"
+        "404":
+          $ref: "#/components/responses/404NotFound"
+
+  /doctors/{id}/slots:
+    get:
+      tags: [Doctors]
+      summary: Get available slots for a doctor
+      description: Returns available slots for a doctor within a date range (max 30 days).
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+        - name: from_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+          example: "2025-06-15"
+        - name: to_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+          example: "2025-06-22"
+        - name: booking_mode
+          in: query
+          schema:
+            $ref: "#/components/schemas/BookingMode"
+      responses:
+        "200":
+          description: Slots grouped by date
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  doctor_id:
+                    $ref: "#/components/schemas/UUID"
+                  slots_by_date:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        $ref: "#/components/schemas/Slot"
+                    example:
+                      "2025-06-15":
+                        - id: "uuid"
+                          start_time: "09:00:00"
+                          end_time: "09:30:00"
+                          booking_mode: "either"
+                          status: "available"
+                          confidence_score: 0.97
+
+  /doctors/{id}/reviews:
+    get:
+      tags: [Doctors]
+      summary: Get published reviews for a doctor
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+        - name: sort_by
+          in: query
+          schema:
+            type: string
+            enum: [newest, highest_rated, lowest_rated]
+            default: newest
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedResponse"
+                  - type: object
+                    properties:
+                      results:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/Review"
+                      summary:
+                        type: object
+                        properties:
+                          rating_avg:
+                            type: number
+                          rating_punctuality_avg:
+                            type: number
+                          rating_communication_avg:
+                            type: number
+                          rating_medical_avg:
+                            type: number
+                          total_reviews:
+                            type: integer
+
+  /doctors/me/profile:
+    get:
+      tags: [Doctors]
+      summary: Get the authenticated doctor's own profile (doctor role)
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DoctorProfileFull"
+        "403":
+          $ref: "#/components/responses/403Forbidden"
+        "404":
+          description: Doctor profile not yet created
+
+    patch:
+      tags: [Doctors]
+      summary: Update authenticated doctor's profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bio:
+                  type: string
+                years_of_experience:
+                  type: integer
+                accepts_new_patients:
+                  type: boolean
+                is_profile_active:
+                  type: boolean
+                languages:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/DoctorLanguage"
+                qualifications:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/DoctorQualification"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DoctorProfileFull"
+
+  /doctors/me/kyc:
+    post:
+      tags: [Doctors]
+      summary: Submit KYC verification documents
+      description: |
+        Submits license number and council details for platform review.
+        Status moves to `pending_review`. Admin reviews within 24–48 hours.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [license_number, license_issuing_council, license_storage_key]
+              properties:
+                license_number:
+                  type: string
+                license_issuing_council:
+                  type: string
+                  example: "Ghana Medical and Dental Council"
+                license_expiry_date:
+                  type: string
+                  format: date
+                license_storage_key:
+                  type: string
+                  description: Storage key of the uploaded license scan
+      responses:
+        "200":
+          description: KYC submitted for review
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  verification_status:
+                    $ref: "#/components/schemas/VerificationStatus"
+                  message:
+                    type: string
+
+  # ----------------------------------------------------------
+  # CLINICS
+  # ----------------------------------------------------------
+
+  /clinics:
+    post:
+      tags: [Clinics]
+      summary: Create a new clinic
+      description: Doctor or clinic_admin roles only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, city, country_code]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                address_line1:
+                  type: string
+                address_line2:
+                  type: string
+                city:
+                  type: string
+                region:
+                  type: string
+                country_code:
+                  type: string
+                  default: "GH"
+                postal_code:
+                  type: string
+                latitude:
+                  type: number
+                longitude:
+                  type: number
+                phone:
+                  type: string
+                email:
+                  type: string
+                website:
+                  type: string
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Clinic"
+
+  /clinics/{id}:
+    get:
+      tags: [Clinics]
+      summary: Get clinic details
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Clinic"
+        "404":
+          $ref: "#/components/responses/404NotFound"
+
+    patch:
+      tags: [Clinics]
+      summary: Update clinic details
+      description: Clinic admin or the doctor who created it only.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                address_line1:
+                  type: string
+                city:
+                  type: string
+                phone:
+                  type: string
+                email:
+                  type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Clinic"
+
+  # ----------------------------------------------------------
+  # AVAILABILITY
+  # ----------------------------------------------------------
+
+  /doctors/me/affiliations:
+    get:
+      tags: [Availability]
+      summary: List doctor's clinic affiliations
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ClinicAffiliationSummary"
+
+    post:
+      tags: [Availability]
+      summary: Add a clinic affiliation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [clinic_id, consultation_fee, currency_code]
+              properties:
+                clinic_id:
+                  $ref: "#/components/schemas/UUID"
+                consulting_room:
+                  type: string
+                is_primary_clinic:
+                  type: boolean
+                  default: false
+                consultation_fee:
+                  type: integer
+                  description: Minor units
+                currency_code:
+                  type: string
+                  default: "GHS"
+                telehealth_fee:
+                  type: integer
+                  nullable: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClinicAffiliationSummary"
+
+  /doctors/me/affiliations/{id}:
+    patch:
+      tags: [Availability]
+      summary: Update a clinic affiliation
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                consulting_room:
+                  type: string
+                is_primary_clinic:
+                  type: boolean
+                consultation_fee:
+                  type: integer
+                telehealth_fee:
+                  type: integer
+                  nullable: true
+                is_active:
+                  type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClinicAffiliationSummary"
+
+  /doctors/me/availability-templates:
+    get:
+      tags: [Availability]
+      summary: List doctor's availability templates
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AvailabilityTemplate"
+
+    post:
+      tags: [Availability]
+      summary: Create an availability template
+      description: |
+        Defines a recurring weekly availability window.
+        Slots are generated by the nightly Celery task up to 60 days out.
+        Triggers immediate slot generation for the next 60 days on creation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [
+                  day_of_week,
+                  start_time,
+                  end_time,
+                  slot_duration_minutes,
+                  booking_mode,
+                ]
+              properties:
+                clinic_affiliation_id:
+                  $ref: "#/components/schemas/UUID"
+                  nullable: true
+                day_of_week:
+                  $ref: "#/components/schemas/DayOfWeek"
+                start_time:
+                  type: string
+                  format: time
+                  example: "08:00:00"
+                end_time:
+                  type: string
+                  format: time
+                  example: "17:00:00"
+                slot_duration_minutes:
+                  type: integer
+                  enum: [15, 20, 30, 45, 60]
+                booking_mode:
+                  $ref: "#/components/schemas/BookingMode"
+                buffer_minutes:
+                  type: integer
+                  default: 0
+                effective_from:
+                  type: string
+                  format: date
+                effective_until:
+                  type: string
+                  format: date
+                  nullable: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilityTemplate"
+
+  /doctors/me/availability-templates/{id}:
+    patch:
+      tags: [Availability]
+      summary: Update an availability template
+      description: |
+        Changes take effect on future slot generation only.
+        Already-generated future slots are NOT retroactively changed.
+        To change existing slots, use the slot block endpoint.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                start_time:
+                  type: string
+                  format: time
+                end_time:
+                  type: string
+                  format: time
+                slot_duration_minutes:
+                  type: integer
+                  enum: [15, 20, 30, 45, 60]
+                booking_mode:
+                  $ref: "#/components/schemas/BookingMode"
+                buffer_minutes:
+                  type: integer
+                is_active:
+                  type: boolean
+                effective_until:
+                  type: string
+                  format: date
+                  nullable: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AvailabilityTemplate"
+
+    delete:
+      tags: [Availability]
+      summary: Delete an availability template
+      description: Soft-deletes the template. Does not affect already-generated slots.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "204":
+          description: Template deleted
+
+  /doctors/me/slots:
+    get:
+      tags: [Availability]
+      summary: List doctor's own slots (all statuses)
+      parameters:
+        - name: from_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: to_date
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/SlotStatus"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  slots_by_date:
+                    type: object
+                    additionalProperties:
+                      type: array
+                      items:
+                        $ref: "#/components/schemas/Slot"
+
+  /slots/{id}/block:
+    post:
+      tags: [Availability]
+      summary: Block a specific slot
+      description: |
+        Doctor or clinic admin only. Cannot block a slot that has status = booked.
+        If a confirmed appointment exists for this slot, use the appointment cancellation
+        endpoint instead (which handles patient notification and refunds).
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  example: "Doctor in surgery"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Slot"
+        "409":
+          description: Slot is already booked — cannot block
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "SLOT_ALREADY_BOOKED"
+                  message: "This slot has a confirmed appointment. Cancel the appointment first."
+
+  /slots/{id}/unblock:
+    post:
+      tags: [Availability]
+      summary: Unblock a blocked slot
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Slot"
+
+  # ----------------------------------------------------------
+  # APPOINTMENTS
+  # ----------------------------------------------------------
+
+  /appointments:
+    get:
+      tags: [Appointments]
+      summary: List appointments for the authenticated user
+      description: |
+        Returns appointments relevant to the authenticated user's role:
+        - Patient: their own appointments
+        - Doctor: appointments assigned to them
+        - Clinic admin: all appointments at their clinic
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/AppointmentStatus"
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: booking_mode
+          in: query
+          schema:
+            $ref: "#/components/schemas/BookingMode"
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedResponse"
+                  - type: object
+                    properties:
+                      results:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/AppointmentSummary"
+
+    post:
+      tags: [Appointments]
+      summary: Create (book) an appointment
+      description: |
+        The core booking endpoint. Atomically:
+        1. Reserves the slot (`SELECT FOR UPDATE`)
+        2. Creates the appointment in `requested` status
+        3. Initiates payment (Paystack) if pay-upfront
+        4. Sends booking notifications
+        5. Returns appointment + payment initiation data
+
+        The slot reservation expires in 10 minutes if payment is not completed.
+        For pay-at-desk clinics, appointment moves to `confirmed` immediately.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slot_id, booking_mode, pre_consultation_responses]
+              properties:
+                slot_id:
+                  $ref: "#/components/schemas/UUID"
+                booking_mode:
+                  type: string
+                  enum: [in_person, telehealth]
+                  description: Must be compatible with the slot's booking_mode
+                pre_consultation_responses:
+                  type: object
+                  additionalProperties: true
+                  description: Map of form field_id → answer
+                patient_notes:
+                  type: string
+                  nullable: true
+                payment_provider:
+                  type: string
+                  enum: [paystack, stripe]
+                  default: paystack
+                  description: Payment method. Omit for pay-at-desk bookings.
+      responses:
+        "201":
+          description: Appointment created and slot reserved
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [appointment, payment]
+                properties:
+                  appointment:
+                    $ref: "#/components/schemas/AppointmentSummary"
+                  payment:
+                    type: object
+                    nullable: true
+                    description: Null for pay-at-desk bookings
+                    properties:
+                      provider:
+                        $ref: "#/components/schemas/PaymentProvider"
+                      authorization_url:
+                        type: string
+                        format: uri
+                        description: Redirect URL for Paystack inline checkout (web)
+                      access_code:
+                        type: string
+                        description: Paystack access code for mobile SDK
+                      reference:
+                        type: string
+                        description: Payment reference to verify after checkout
+                      expires_at:
+                        type: string
+                        format: date-time
+                        description: Payment must be completed before this time
+        "400":
+          $ref: "#/components/responses/400BadRequest"
+        "409":
+          description: Slot is no longer available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "SLOT_UNAVAILABLE"
+                  message: "This slot is no longer available. Please select another time."
+
+  /appointments/{id}:
+    get:
+      tags: [Appointments]
+      summary: Get full appointment details
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppointmentFull"
+        "403":
+          $ref: "#/components/responses/403Forbidden"
+        "404":
+          $ref: "#/components/responses/404NotFound"
+
+  /appointments/{id}/confirm:
+    post:
+      tags: [Appointments]
+      summary: Doctor confirms an appointment
+      description: |
+        Moves appointment from `requested` → `confirmed`.
+        Triggers confirmation notifications to patient.
+        Doctor role only. Auto-confirmed for pay-at-desk bookings.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppointmentSummary"
+        "409":
+          description: Appointment is not in a confirmable state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /appointments/{id}/start:
+    post:
+      tags: [Appointments]
+      summary: Doctor starts the consultation
+      description: |
+        Moves appointment from `confirmed` → `in_progress`.
+        Sets `actual_start_time`. Records estimated wait.
+        Doctor role only. Only valid within 30 minutes of scheduled start.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppointmentSummary"
+
+  /appointments/{id}/complete:
+    post:
+      tags: [Appointments]
+      summary: Doctor completes the consultation
+      description: |
+        Moves appointment from `in_progress` → `completed`.
+        Sets `actual_end_time`.
+        Triggers review request notification (delayed 2 hours).
+        Queues payout calculation for next payout cycle.
+        Doctor role only.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                follow_up_recommended:
+                  type: boolean
+                follow_up_notes:
+                  type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppointmentSummary"
+
+  /appointments/{id}/cancel:
+    post:
+      tags: [Appointments]
+      summary: Cancel an appointment
+      description: |
+        Valid for patients and doctors. Platform admins can cancel any appointment.
+
+        Cancellation rules:
+        - Patient cancels within free window (set by doctor, e.g. 24h before): full refund
+        - Patient cancels outside free window: partial or no refund per clinic policy
+        - Doctor cancels: full refund always, doctor's response_rate_pct decremented
+        - Platform cancels: full refund always
+
+        Triggers cancellation notification to the other party.
+        Automatically unblocks the slot (marks as available again).
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+                  minLength: 5
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  appointment:
+                    $ref: "#/components/schemas/AppointmentSummary"
+                  refund:
+                    type: object
+                    nullable: true
+                    properties:
+                      amount:
+                        $ref: "#/components/schemas/MoneyAmount"
+                      policy_applied:
+                        type: string
+                        example: "full_refund"
+                      estimated_days:
+                        type: integer
+                        example: 3
+
+  /appointments/{id}/reschedule:
+    post:
+      tags: [Appointments]
+      summary: Reschedule an appointment to a new slot
+      description: |
+        Patient or doctor can reschedule (within policy window).
+        Atomically: releases old slot, reserves new slot, updates appointment.
+        No new payment required if fees match.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_slot_id]
+              properties:
+                new_slot_id:
+                  $ref: "#/components/schemas/UUID"
+                reason:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppointmentSummary"
+        "409":
+          description: New slot unavailable or outside rescheduling window
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /appointments/{id}/no-show:
+    post:
+      tags: [Appointments]
+      summary: Mark patient or doctor as no-show
+      description: |
+        Doctor marks patient no-show: moves to `no_show_patient`. No refund.
+        Platform admin marks doctor no-show: moves to `no_show_doctor`. Full patient refund.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [no_show_party]
+              properties:
+                no_show_party:
+                  type: string
+                  enum: [patient, doctor]
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppointmentSummary"
+
+  /appointments/{id}/ics:
+    get:
+      tags: [Appointments]
+      summary: Download .ics calendar file for an appointment
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "200":
+          description: ICS file
+          content:
+            text/calendar:
+              schema:
+                type: string
+
+  # ----------------------------------------------------------
+  # HEALTH RECORDS
+  # ----------------------------------------------------------
+
+  /patients/me/timeline:
+    get:
+      tags: [Health Records]
+      summary: Get patient's health timeline
+      description: Patient only. Returns decrypted entries.
+      parameters:
+        - name: entry_type
+          in: query
+          schema:
+            $ref: "#/components/schemas/TimelineEntryType"
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: pinned_only
+          in: query
+          schema:
+            type: boolean
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedResponse"
+                  - type: object
+                    properties:
+                      results:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HealthTimelineEntry"
+
+    post:
+      tags: [Health Records]
+      summary: Add a patient self-authored timeline entry
+      description: "Patient only. Types allowed: symptom_log, patient_note, allergy_record."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [entry_type, content]
+              properties:
+                entry_type:
+                  type: string
+                  enum: [symptom_log, patient_note, allergy_record]
+                title:
+                  type: string
+                content:
+                  type: object
+                  additionalProperties: true
+                visibility:
+                  $ref: "#/components/schemas/TimelineVisibility"
+                  default: patient_only
+                is_pinned:
+                  type: boolean
+                  default: false
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthTimelineEntry"
+
+  /patients/{patient_id}/timeline:
+    get:
+      tags: [Health Records]
+      summary: Doctor reads a patient's shared timeline entries
+      description: |
+        Doctor only. Returns only entries where:
+        - `visibility` is `shared_with_current_doctor` or `shared_with_all_future_doctors`
+        - A valid, non-revoked `consent_grant` exists for this doctor-patient pair
+      parameters:
+        - name: patient_id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/UUID"
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedResponse"
+                  - type: object
+                    properties:
+                      results:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/HealthTimelineEntry"
+        "403":
+          description: No valid consent grant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "CONSENT_REQUIRED"
+                  message: "Patient has not granted you access to their health timeline."
+
+  /appointments/{id}/diagnosis:
+    post:
+      tags: [Health Records]
+      summary: Doctor adds a diagnosis note to an appointment
+      description: |
+        Doctor only. Appointment must be `in_progress` or `completed`.
+        Creates a `diagnosis_note` health timeline entry linked to this appointment.
+        Content is encrypted before storage. Patient can view immediately.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [summary, diagnosis]
+              properties:
+                title:
+                  type: string
+                summary:
+                  type: string
+                details:
+                  type: string
+                diagnosis:
+                  type: string
+                icd10_codes:
+                  type: array
+                  items:
+                    type: string
+                prescription:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      drug:
+                        type: string
+                      dosage:
+                        type: string
+                      frequency:
+                        type: string
+                      duration:
+                        type: string
+                follow_up_in_days:
+                  type: integer
+                  nullable: true
+                visibility:
+                  $ref: "#/components/schemas/TimelineVisibility"
+                  default: shared_with_current_doctor
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthTimelineEntry"
+
+  /patients/me/timeline/{id}:
+    patch:
+      tags: [Health Records]
+      summary: Update a patient-authored timeline entry
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                content:
+                  type: object
+                visibility:
+                  $ref: "#/components/schemas/TimelineVisibility"
+                is_pinned:
+                  type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthTimelineEntry"
+
+    delete:
+      tags: [Health Records]
+      summary: Soft-delete a patient-authored timeline entry
+      description: Patient only. Cannot delete doctor-authored entries.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "204":
+          description: Entry deleted
+
+  /patients/me/timeline/export:
+    post:
+      tags: [Health Records]
+      summary: Export health timeline as PDF
+      description: |
+        Queues a WeasyPrint PDF generation job.
+        Patient receives a notification with a download link when ready.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                from_date:
+                  type: string
+                  format: date
+                to_date:
+                  type: string
+                  format: date
+                include_types:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/TimelineEntryType"
+      responses:
+        "202":
+          description: Export job queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  estimated_minutes:
+                    type: integer
+
+  /patients/me/consent-grants:
+    get:
+      tags: [Health Records]
+      summary: List patient's active consent grants
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          $ref: "#/components/schemas/UUID"
+                        doctor:
+                          $ref: "#/components/schemas/DoctorProfileSummary"
+                        scope:
+                          $ref: "#/components/schemas/ConsentScope"
+                        granted_at:
+                          type: string
+                          format: date-time
+                        expires_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+
+    post:
+      tags: [Health Records]
+      summary: Grant a doctor access to health timeline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [doctor_profile_id, scope]
+              properties:
+                doctor_profile_id:
+                  $ref: "#/components/schemas/UUID"
+                scope:
+                  $ref: "#/components/schemas/ConsentScope"
+                expires_at:
+                  type: string
+                  format: date-time
+                  nullable: true
+      responses:
+        "201":
+          description: Consent granted
+
+  /patients/me/consent-grants/{id}/revoke:
+    post:
+      tags: [Health Records]
+      summary: Revoke a consent grant
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Consent revoked
+
+  /patients/me/saved-doctors:
+    get:
+      tags: [Doctors]
+      summary: List patient's saved doctors
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DoctorProfileSummary"
+
+    post:
+      tags: [Doctors]
+      summary: Save a doctor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [doctor_profile_id]
+              properties:
+                doctor_profile_id:
+                  $ref: "#/components/schemas/UUID"
+      responses:
+        "201":
+          description: Doctor saved
+        "409":
+          description: Already saved
+
+  /patients/me/saved-doctors/{doctor_profile_id}:
+    delete:
+      tags: [Doctors]
+      summary: Unsave a doctor
+      parameters:
+        - name: doctor_profile_id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/UUID"
+      responses:
+        "204":
+          description: Doctor unsaved
+
+  # ----------------------------------------------------------
+  # PAYMENTS
+  # ----------------------------------------------------------
+
+  /payments/verify:
+    post:
+      tags: [Payments]
+      summary: Verify a payment after checkout redirect
+      description: |
+        Called by the client after returning from Paystack/Stripe checkout.
+        Server verifies with the payment provider, updates payment_transaction status,
+        and moves appointment to `confirmed` if payment succeeded.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reference, provider]
+              properties:
+                reference:
+                  type: string
+                  description: Paystack reference or Stripe PaymentIntent ID
+                provider:
+                  $ref: "#/components/schemas/PaymentProvider"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  payment:
+                    $ref: "#/components/schemas/PaymentTransaction"
+                  appointment:
+                    $ref: "#/components/schemas/AppointmentSummary"
+        "400":
+          description: Payment verification failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: "PAYMENT_FAILED"
+                  message: "Payment was not successful. Please try again."
+
+  /payments/webhooks/paystack:
+    post:
+      tags: [Payments]
+      summary: Paystack webhook receiver
+      description: |
+        Receives webhook events from Paystack (charge.success, refund.processed, etc.).
+        Validates the `x-paystack-signature` HMAC header before processing.
+        Returns 200 immediately; processing is async (Celery task).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Webhook received
+
+  /payments/webhooks/stripe:
+    post:
+      tags: [Payments]
+      summary: Stripe webhook receiver
+      description: Validates Stripe-Signature header. Processes async.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Webhook received
+
+  /payments/history:
+    get:
+      tags: [Payments]
+      summary: List payment transactions for the authenticated user
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/PaymentStatus"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedResponse"
+                  - type: object
+                    properties:
+                      results:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/PaymentTransaction"
+
+  /doctors/me/earnings:
+    get:
+      tags: [Payments]
+      summary: Doctor earnings summary and payout history
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [this_week, this_month, last_month, custom]
+            default: this_month
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: to_date
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary:
+                    type: object
+                    properties:
+                      gross_earned:
+                        $ref: "#/components/schemas/MoneyAmount"
+                      platform_fees:
+                        $ref: "#/components/schemas/MoneyAmount"
+                      net_earned:
+                        $ref: "#/components/schemas/MoneyAmount"
+                      completed_appointments:
+                        type: integer
+                      pending_payout:
+                        $ref: "#/components/schemas/MoneyAmount"
+                  payouts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          $ref: "#/components/schemas/UUID"
+                        period_start:
+                          type: string
+                          format: date
+                        period_end:
+                          type: string
+                          format: date
+                        net_amount:
+                          $ref: "#/components/schemas/MoneyAmount"
+                        status:
+                          type: string
+                        processed_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+
+  /doctors/me/bank-accounts:
+    get:
+      tags: [Payments]
+      summary: List doctor's registered bank accounts
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          $ref: "#/components/schemas/UUID"
+                        bank_name:
+                          type: string
+                        account_name:
+                          type: string
+                        account_number_last4:
+                          type: string
+                          description: Last 4 digits only — never returns full account number
+                        is_primary:
+                          type: boolean
+                        is_verified:
+                          type: boolean
+                        currency_code:
+                          type: string
+
+    post:
+      tags: [Payments]
+      summary: Add a bank account for payouts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bank_name, account_number, account_name, currency_code]
+              properties:
+                bank_name:
+                  type: string
+                bank_code:
+                  type: string
+                  description: Paystack bank code
+                account_number:
+                  type: string
+                account_name:
+                  type: string
+                currency_code:
+                  type: string
+                  default: "GHS"
+                is_primary:
+                  type: boolean
+                  default: false
+      responses:
+        "201":
+          description: Bank account added and verification initiated via Paystack
+
+  # ----------------------------------------------------------
+  # REVIEWS
+  # ----------------------------------------------------------
+
+  /appointments/{id}/review:
+    post:
+      tags: [Reviews]
+      summary: Submit a review for a completed appointment
+      description: |
+        Patient only. Appointment must be `completed`.
+        One review per appointment (enforced by UNIQUE constraint).
+        Review is created in `pending` status and auto-published after basic moderation.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                [
+                  rating_overall,
+                  rating_punctuality,
+                  rating_communication,
+                  rating_medical,
+                ]
+              properties:
+                rating_overall:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                rating_punctuality:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                rating_communication:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                rating_medical:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                review_text:
+                  type: string
+                  maxLength: 2000
+                  nullable: true
+                is_anonymous:
+                  type: boolean
+                  default: false
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Review"
+        "409":
+          description: Review already submitted for this appointment
+
+  /reviews/{id}/reply:
+    post:
+      tags: [Reviews]
+      summary: Doctor replies to a review
+      description: Doctor only. One reply per review. Cannot edit after submission.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reply]
+              properties:
+                reply:
+                  type: string
+                  maxLength: 1000
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Review"
+        "409":
+          description: Reply already submitted
+
+  /reviews/{id}/flag:
+    post:
+      tags: [Reviews]
+      summary: Flag a review for moderation
+      description: Doctor or any authenticated user can flag. Platform admin reviews flags.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Review flagged for moderation
+
+  # ----------------------------------------------------------
+  # NOTIFICATIONS
+  # ----------------------------------------------------------
+
+  /notifications/preferences:
+    get:
+      tags: [Notifications]
+      summary: Get notification preferences
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  preferences:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/NotificationPreference"
+
+    put:
+      tags: [Notifications]
+      summary: Update notification preferences (bulk replace)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [preferences]
+              properties:
+                preferences:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/NotificationPreference"
+      responses:
+        "200":
+          description: Preferences updated
+
+  /notifications/history:
+    get:
+      tags: [Notifications]
+      summary: In-app notification history
+      parameters:
+        - $ref: "#/components/parameters/CursorParam"
+        - $ref: "#/components/parameters/PageSizeParam"
+        - name: unread_only
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/PaginatedResponse"
+                  - type: object
+                    properties:
+                      results:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            id:
+                              $ref: "#/components/schemas/UUID"
+                            title:
+                              type: string
+                            body:
+                              type: string
+                            is_read:
+                              type: boolean
+                            related_entity_type:
+                              type: string
+                              nullable: true
+                              example: "appointment"
+                            related_entity_id:
+                              $ref: "#/components/schemas/UUID"
+                              nullable: true
+                            created_at:
+                              type: string
+                              format: date-time
+
+  /notifications/{id}/read:
+    post:
+      tags: [Notifications]
+      summary: Mark a notification as read
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "200":
+          description: Marked as read
+
+  /notifications/read-all:
+    post:
+      tags: [Notifications]
+      summary: Mark all notifications as read
+      responses:
+        "204":
+          description: All marked as read
+
+  # ----------------------------------------------------------
+  # SPECIALIZATIONS (Reference Data)
+  # ----------------------------------------------------------
+
+  /specializations:
+    get:
+      tags: [Doctors]
+      summary: List all active specializations
+      security: []
+      parameters:
+        - name: parent_id
+          in: query
+          schema:
+            $ref: "#/components/schemas/UUID"
+          description: Filter by parent specialization (for sub-specialties)
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Specialization"
+
+  # ----------------------------------------------------------
+  # PRE-CONSULTATION FORM TEMPLATES (Doctor)
+  # ----------------------------------------------------------
+
+  /doctors/me/form-templates:
+    get:
+      tags: [Appointments]
+      summary: List doctor's pre-consultation form templates
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          $ref: "#/components/schemas/UUID"
+                        name:
+                          type: string
+                        is_default:
+                          type: boolean
+                        is_active:
+                          type: boolean
+                        field_count:
+                          type: integer
+
+    post:
+      tags: [Appointments]
+      summary: Create a pre-consultation form template
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, fields]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                is_default:
+                  type: boolean
+                fields:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/PreConsultationField"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    $ref: "#/components/schemas/UUID"
+                  name:
+                    type: string
+                  fields:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PreConsultationField"
+
+  /doctors/me/form-templates/{id}:
+    get:
+      tags: [Appointments]
+      summary: Get a specific form template (with all fields)
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    $ref: "#/components/schemas/UUID"
+                  name:
+                    type: string
+                  fields:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PreConsultationField"
+
+    put:
+      tags: [Appointments]
+      summary: Replace a form template (creates new version)
+      description: |
+        Creates a new version of the template. Existing appointments that used the
+        previous version retain a snapshot of that version's fields in their
+        `pre_consultation_responses` JSONB. The old version is archived.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, fields]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                is_default:
+                  type: boolean
+                fields:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/PreConsultationField"
+      responses:
+        "200":
+          description: New version created
+
+  # ----------------------------------------------------------
+  # PLATFORM ADMIN
+  # ----------------------------------------------------------
+
+  /admin/doctors/{id}/verify:
+    post:
+      tags: [Admin]
+      summary: Approve or reject a doctor's KYC submission
+      description: platform_admin role only.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [approve, reject, suspend]
+                rejection_reason:
+                  type: string
+                  description: Required when action = reject or suspend
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  doctor_profile_id:
+                    $ref: "#/components/schemas/UUID"
+                  verification_status:
+                    $ref: "#/components/schemas/VerificationStatus"
+
+  /admin/reviews/{id}/moderate:
+    post:
+      tags: [Admin]
+      summary: Publish, remove, or unflag a review
+      description: platform_admin role only.
+      parameters:
+        - $ref: "#/components/parameters/UUIDPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [publish, remove, unflag]
+                reason:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Review"
+
+  /admin/payouts/trigger:
+    post:
+      tags: [Admin]
+      summary: Manually trigger the weekly payout batch
+      description: platform_admin role only. Normally runs automatically on Sunday 22:00 WAT.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                period_start:
+                  type: string
+                  format: date
+                period_end:
+                  type: string
+                  format: date
+                dry_run:
+                  type: boolean
+                  default: true
+                  description: If true, returns what would be paid without executing transfers
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_recipients:
+                    type: integer
+                  total_gross:
+                    $ref: "#/components/schemas/MoneyAmount"
+                  total_platform_fees:
+                    $ref: "#/components/schemas/MoneyAmount"
+                  total_net:
+                    $ref: "#/components/schemas/MoneyAmount"
+                  dry_run:
+                    type: boolean
+                  payouts_created:
+                    type: integer
+
+  /admin/feature-flags:
+    get:
+      tags: [Admin]
+      summary: List all feature flags
+      description: platform_admin role only.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key:
+                          type: string
+                        is_enabled:
+                          type: boolean
+                        rollout_pct:
+                          type: integer
+                        description:
+                          type: string
+
+  /admin/feature-flags/{key}:
+    patch:
+      tags: [Admin]
+      summary: Update a feature flag
+      description: platform_admin role only.
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                is_enabled:
+                  type: boolean
+                rollout_pct:
+                  type: integer
+                  minimum: 0
+                  maximum: 100
+      responses:
+        "200":
+          description: Flag updated
+
+  # ----------------------------------------------------------
+  # HEALTH CHECK
+  # ----------------------------------------------------------
+
+  /health:
+    get:
+      tags: [Admin]
+      summary: Platform health check
+      description: Returns service status. Used by Railway and monitoring.
+      security: []
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "healthy"
+                  db:
+                    type: string
+                    example: "ok"
+                  redis:
+                    type: string
+                    example: "ok"
+                  celery:
+                    type: string
+                    example: "ok"
+                  version:
+                    type: string
+                    example: "1.0.0"
