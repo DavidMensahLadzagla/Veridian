@@ -155,8 +155,8 @@ before adding it.
 
 **Backend:**
 
-- Python 3.12
-- Django 5.x + Django REST Framework 3.x
+- Python 3.13 (pinned; Django 5.2 supports 3.10–3.14, 3.14 tracked as a CI canary — ADR-0005 stack review)
+- Django 5.2 LTS + Django REST Framework 3.x  (LTS chosen over 6.0 for ~3-yr security support on a PHI platform)
 - SimpleJWT for JWT authentication
 - Celery 5.x + Redis 7 for async tasks
 - Supabase (PostgreSQL 15 + pgvector + PostGIS + Realtime + Storage)
