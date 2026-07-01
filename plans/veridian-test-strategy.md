@@ -609,7 +609,6 @@ Flutter and Next.js read a defined subset of tables directly via the Supabase cl
 | `clinic_affiliations`    | anon + authenticated | Only rows whose doctor_profile is public                           |
 | `reviews`                | anon + authenticated | Only `status='published' AND deleted_at IS NULL`                   |
 | `v_appointments_safe`    | authenticated        | Only rows where user is patient or doctor; URLs null outside T-15  |
-| `health_timeline_entries`| authenticated        | Patient owns, or doctor has active non-revoked consent_grant       |
 | `consent_grants`         | authenticated        | Only patient (own) or doctor (granted_to)                          |
 | `saved_doctors`          | authenticated        | Only own                                                           |
 | `notification_preferences` | authenticated      | Only own                                                           |
@@ -658,52 +657,57 @@ class TestTelehealthURLGate:
             sb.table('appointments').select('telehealth_room_url').execute()
 
 
-class TestTimelineRLS:
-    def test_patient_reads_own_timeline(self, supabase_as, timeline_entry_factory):
+class TestTimelineNotDirectlyReadable:
+    """ADR-0003: health_timeline_entries is Django-only. Content is encrypted with a
+    per-patient key only Django holds, so a direct Supabase read is undecryptable AND
+    widens the PHI surface. Direct SELECT is REVOKEd from `authenticated`. The direct-read
+    suite therefore only asserts the table is unreachable from a client token; the actual
+    patient/doctor timeline access (with decryption + consent enforcement) is tested at the
+    DRF layer in health_records/tests/test_timeline.py and test_consent.py."""
+
+    def test_authenticated_cannot_direct_read_timeline(self, supabase_as, timeline_entry_factory):
         entry = timeline_entry_factory()
-        sb = supabase_as(entry.patient)
-        rows = sb.table('health_timeline_entries').select('id').eq('id', entry.id).execute()
-        assert len(rows.data) == 1
+        sb = supabase_as(entry.patient)          # even the owning patient
+        with pytest.raises(Exception):            # permission denied — table SELECT revoked
+            sb.table('health_timeline_entries').select('id').eq('id', entry.id).execute()
 
-    def test_other_patient_cannot_read(self, supabase_as, user_factory, timeline_entry_factory):
-        entry = timeline_entry_factory()
-        other = user_factory(role='patient')
-        sb = supabase_as(other)
-        rows = sb.table('health_timeline_entries').select('id').eq('id', entry.id).execute()
-        assert rows.data == []
-
-    def test_doctor_without_consent_cannot_read(self, supabase_as, doctor_factory, timeline_entry_factory):
-        entry = timeline_entry_factory(visibility='shared_with_current_doctor')
-        doctor = doctor_factory()  # no consent_grant created
-        sb = supabase_as(doctor.user)
-        rows = sb.table('health_timeline_entries').select('id').eq('id', entry.id).execute()
-        assert rows.data == []
-
-    def test_doctor_with_revoked_consent_cannot_read(self, supabase_as, doctor_factory, timeline_entry_factory, consent_factory):
-        entry = timeline_entry_factory(visibility='shared_with_current_doctor')
-        doctor = doctor_factory()
-        consent_factory(patient=entry.patient, doctor=doctor.profile, revoked_at=now())
-        sb = supabase_as(doctor.user)
-        rows = sb.table('health_timeline_entries').select('id').eq('id', entry.id).execute()
-        assert rows.data == []
+    # Consent enforcement for doctor timeline reads (with/without/revoked consent, plus
+    # decryption) moved to the DRF layer — see health_records/tests/test_consent.py and
+    # test_timeline.py — because the table is Django-only under ADR-0003. The RLS
+    # `timeline_doctor_consent_read` policy still exists as defence in depth for the
+    # service-role path and is exercised there.
 
 
 class TestRealtimeRLS:
-    """Supabase Realtime has historically had subtle RLS gaps on INSERT events —
-    test that a patient's realtime subscription on their appointments table does
-    NOT receive INSERT events for other patients' appointments."""
-    def test_realtime_filters_by_rls(self, supabase_as, user_factory, appointment_factory):
-        me = user_factory(role='patient')
-        sb = supabase_as(me)
+    """ADR-0003: appointments are NOT exposed via Realtime — base-table SELECT is revoked
+    from `authenticated`, and Realtime Postgres Changes is table-level (cannot watch
+    v_appointments_safe). Status changes ride on FCM push + pull. These tests lock in that
+    decision: (1) an authenticated client receives NO appointment Realtime events, not even
+    for its OWN appointment; (2) the one path we DO use — slots Realtime — respects the
+    public RLS filter."""
+
+    def test_appointments_realtime_delivers_nothing_to_authenticated(self, supabase_as, appointment_factory):
+        appt = appointment_factory()                      # the subscriber's own appointment
+        sb = supabase_as(appt.patient)
         received = []
-        channel = sb.channel('appointments').on('postgres_changes',
+        sb.channel('appointments').on('postgres_changes',
             event='*', schema='public', table='appointments',
             callback=lambda p: received.append(p)).subscribe()
-        # Insert an appointment for a DIFFERENT patient
-        other = user_factory(role='patient')
-        appointment_factory(patient=other)
+        appointment_factory(patient=appt.patient)         # trigger an INSERT on the subscribed table
         time.sleep(2)
-        assert received == []  # No cross-patient leak
+        assert received == []  # SELECT revoked → Realtime yields nothing; clients must use push+pull
+
+    def test_slots_realtime_only_streams_available_future_slots(self, supabase_as, slot_factory, user_factory):
+        sb = supabase_as(user_factory(role='patient'))
+        received = []
+        sb.channel('slots').on('postgres_changes',
+            event='*', schema='public', table='slots',
+            callback=lambda p: received.append(p)).subscribe()
+        blocked = slot_factory(status='blocked')          # not in the public RLS set
+        available = slot_factory(status='available')      # in the public RLS set
+        time.sleep(2)
+        ids = [p['new']['id'] for p in received]
+        assert available.id in ids and blocked.id not in ids
 ```
 
 **Coverage gate:** 100% of the tables in the direct-read list above must have at least one positive and one negative RLS test. CI fails if any table in the list has no corresponding test.

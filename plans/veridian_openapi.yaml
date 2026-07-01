@@ -991,6 +991,19 @@ components:
       schema:
         $ref: "#/components/schemas/UUID"
 
+    IdempotencyKeyHeader:
+      name: X-Idempotency-Key
+      in: header
+      required: false
+      description: >
+        Idempotency key (UUID) for replayable mutations (ADR-0002). Required from the
+        Flutter offline queue. A replay with a completed key returns the original
+        response verbatim (no re-execution); while the original is in flight the server
+        returns 409 IDEMPOTENCY_IN_PROGRESS; reuse with a different body returns
+        422 IDEMPOTENCY_KEY_REUSED. Keys are scoped per user and retained 7 days.
+      schema:
+        $ref: "#/components/schemas/UUID"
+
   # ============================================================
   # REUSABLE RESPONSES
   # ============================================================
@@ -2464,6 +2477,10 @@ paths:
 
         The slot reservation expires in 10 minutes if payment is not completed.
         For pay-at-desk clinics, appointment moves to `confirmed` immediately.
+
+        Replayable by the offline queue — send `X-Idempotency-Key` (ADR-0002).
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
       requestBody:
         required: true
         content:
@@ -2636,8 +2653,11 @@ paths:
 
         Triggers cancellation notification to the other party.
         Automatically unblocks the slot (marks as available again).
+
+        Replayable by the offline queue — send `X-Idempotency-Key` (ADR-0002).
       parameters:
         - $ref: "#/components/parameters/UUIDPath"
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
       requestBody:
         required: true
         content:
@@ -2679,8 +2699,11 @@ paths:
         Patient or doctor can reschedule (within policy window).
         Atomically: releases old slot, reserves new slot, updates appointment.
         No new payment required if fees match.
+
+        Replayable by the offline queue — send `X-Idempotency-Key` (ADR-0002).
       parameters:
         - $ref: "#/components/parameters/UUIDPath"
+        - $ref: "#/components/parameters/IdempotencyKeyHeader"
       requestBody:
         required: true
         content:

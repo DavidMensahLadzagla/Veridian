@@ -858,29 +858,38 @@ class PullSyncService {
 
 ### Pull Sync Frequency
 
-| Data type                         | Pull frequency                                    | Max staleness  |
-| --------------------------------- | ------------------------------------------------- | -------------- |
-| Appointments                      | Every app foreground + every 60s while foreground | 60 seconds     |
-| Slot availability (saved doctors) | Every app foreground + every 30s while foreground | 30 seconds     |
-| Health timeline                   | Every app foreground                              | 5 minutes      |
-| Notifications                     | Every app foreground + Supabase Realtime          | Near real-time |
-| Doctor profiles (saved)           | Once per app foreground                           | 1 hour         |
-| User profile                      | Once per session                                  | Session        |
+| Data type                         | Pull frequency                                             | Max staleness            |
+| --------------------------------- | --------------------------------------------------------- | ------------------------ |
+| Appointments                      | Every app foreground + every 60s foreground + on FCM push | Near real-time (push)    |
+| Slot availability (saved doctors) | Every app foreground + every 30s foreground + Realtime    | 30 seconds               |
+| Health timeline                   | Every app foreground                                      | 5 minutes                |
+| Notifications                     | Every app foreground + on FCM push receipt                | Near real-time (push)    |
+| Doctor profiles (saved)           | Once per app foreground                                   | 1 hour                   |
+| User profile                      | Once per session                                          | Session                  |
 
 ### Supabase Realtime Subscriptions
 
-These are active while the app is in foreground and online:
+Realtime (Postgres Changes) is used for **`slots` only**, active while the app is in foreground
+and online. `slots` is public (`slots_public_read` RLS) and is in the direct-read inventory
+(threat-model Appendix A), so clients may subscribe to it directly.
+
+**Appointments and notifications do NOT use Realtime** (revised per ADR-0003). Direct `SELECT`
+on the raw `appointments` table is revoked from the `authenticated` role — clients read the
+URL-gated `v_appointments_safe` view instead (threat-model I-4b) — and Supabase Realtime
+Postgres Changes operates at the **table** level: it cannot watch a view, and it will not
+deliver rows a subscriber is not granted to SELECT. So Realtime on appointments is neither
+available nor desirable. Instead, status changes propagate by **FCM push + pull-sync**: the
+server already emits a push on every state transition (state-machines.md task inventory); the
+client responds to that push by pulling the authoritative appointment row, and the 60s
+foreground pull is the backstop. In-app notifications work identically — FCM push is the
+delivery mechanism, and the feed refreshes on foreground and on push receipt. Net latency is
+effectively real-time without exposing the appointments table to clients.
 
 ```dart
 void _setupRealtimeSubscriptions() {
-  // Appointment status changes (patient's own appointments)
-  _supabase
-    .from('appointments')
-    .stream(primaryKey: ['id'])
-    .eq('patient_id', currentUserId)
-    .listen((data) => _onAppointmentRealtime(data));
-
-  // Slot availability changes (saved doctors' slots)
+  // Slot availability for saved doctors. slots RLS filters the stream to
+  // status='available' AND slot_date >= today, so a slot leaving that set (reserved/booked/
+  // blocked) arrives as a REMOVE event — the handler treats it as "no longer bookable".
   for (final doctorId in _savedDoctorIds) {
     _supabase
       .from('slots')
@@ -891,18 +900,21 @@ void _setupRealtimeSubscriptions() {
   }
 }
 
-void _onAppointmentRealtime(List<Map<String, dynamic>> data) {
-  for (final row in data) {
-    final serverId = row['id'];
-    final localAppt = _localDb.appointments.getByServerId(serverId);
+// Appointment updates are triggered by an FCM push, not a Supabase stream.
+Future<void> onAppointmentPush(String appointmentId) async {
+  final row = await _api.appointments.get(appointmentId); // v_appointments_safe path
+  _mergeAppointment(row);
+}
 
-    // If a pending local write exists, don't overwrite it
-    if (localAppt?.syncStatus == SyncStatus.pending) return;
-
-    _localDb.appointments.upsert(
-      AppointmentMapper.toLocalFromRaw(row, syncStatus: SyncStatus.synced),
-    );
-  }
+// Merge rule — identical for the push-triggered pull and the periodic 60s pull:
+// NEVER overwrite a record whose syncStatus = 'pending'. The offline queue owns that row
+// until it flushes (see Pull Sync Strategy).
+void _mergeAppointment(Map<String, dynamic> row) {
+  final localAppt = _localDb.appointments.getByServerId(row['id']);
+  if (localAppt?.syncStatus == SyncStatus.pending) return;
+  _localDb.appointments.upsert(
+    AppointmentMapper.toLocal(row, syncStatus: SyncStatus.synced),
+  );
 }
 ```
 

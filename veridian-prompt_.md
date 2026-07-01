@@ -443,6 +443,18 @@ If any box cannot be checked, fix it before presenting the code.
 Build in this exact order. Do not skip phases. Do not work on Phase 2 until Phase 1 is
 complete and all its tests pass in CI.
 
+> **LAUNCH CUT-LINE (ADR-0005 — authoritative for what ships at v1.0).** The phases below
+> describe the full program. The **v1.0 launch set is online-first and in-person only**: it
+> includes Phases 0–5, Phase 6 (notifications), Phase 7 payouts, Phase 8 mobile **steps 1–9
+> only** (read-through cache — NOT the offline write engine), and Phase 9 web. **Deferred to
+> fast-follow:** telehealth/Daily.co → **v1.1**; Phase 8 **steps 10–12** (offline queue,
+> ConflictResolver, sync UI) → **v1.2**; Phase 7 **Stripe/international** → v1.x; **Phase 10
+> (semantic search) → v1.3**; multi-vertical → v2+. **No security or compliance control is in
+> the cut set** — those all ship in v1.0. Compliance filings run in parallel from day one.
+> v1.0 coverage bar: **100% on critical-path modules (booking, payments, auth, encryption,
+> consent, state machine), ~80% elsewhere** — the "300+ tests / 91%" success picture in
+> Section 7 is the *mature* target, reached as deferred surface lands.
+
 ### Phase 0 — Foundation (build this first, in this order)
 
 ```
@@ -573,7 +585,7 @@ This is the most critical phase. Take the most time here. Get it right.
 ### Phase 7 — Payments & Payouts
 
 ```
-1. Stripe integration (international cards)
+1. Stripe integration (international cards)   # DEFERRED to v1.x — ADR-0005
 2. Doctor earnings dashboard endpoint
 3. Bank account management endpoints
 4. Weekly payout batch Celery task
@@ -603,9 +615,11 @@ sync engine architecture. Build in this order:
 7. Health timeline screen
 8. Profile & consent management screen
 9. Doctor dashboard
-10. Offline sync engine (ConnectivityMonitor, OfflineOperationQueue, SyncEngine)
-11. ConflictResolver (all 10 scenarios)
-12. Offline banner, sync badge, conflict bottom sheet
+10. Offline sync engine (ConnectivityMonitor, OfflineOperationQueue, SyncEngine)  # DEFERRED to v1.2 — ADR-0005
+11. ConflictResolver (all 10 scenarios)                                          # DEFERRED to v1.2 — ADR-0005
+12. Offline banner, sync badge, conflict bottom sheet                            # DEFERRED to v1.2 — ADR-0005
+    # v1.0 mobile = read-through cache only (steps 1–9). Offline WRITES land in v1.2,
+    # on top of the ADR-0002 idempotency contract proven online first.
 13. Full test suite (unit, widget, golden tests)
 ```
 
@@ -626,7 +640,7 @@ sync engine architecture. Build in this order:
 12. Accessibility audit (axe-core, WCAG 2.1 AA)
 ```
 
-### Phase 10 — Semantic Search & Analytics
+### Phase 10 — Semantic Search & Analytics  (DEFERRED to v1.3 — ADR-0005)
 
 ```
 1. OpenAI embedding generation for doctor profiles

@@ -209,7 +209,7 @@ Every threat below is mapped to the boundary it attacks.
 | Prevention | Object-level authorization | Every state transition endpoint checks `appointment.patient_id == request.user.id` OR `appointment.doctor_profile.user_id == request.user.id` before processing.                                 |
 | Prevention | Role checks                | `complete` and `start` require `role = 'doctor'`. `confirm` requires `role = 'doctor'` AND ownership.                                                                                            |
 | Prevention | State machine enforcement  | Service layer checks current status before any transition. Invalid transitions raise `InvalidStateTransitionError`.                                                                              |
-| Prevention | Guard conditions           | `start` requires `NOW() ≥ slot.start_time - 30 minutes`. Cannot start tomorrow's appointment today.                                                                                              |
+| Prevention | Guard conditions           | `start` requires `NOW() ≥ slot.start_at - 30 minutes` (absolute instant, ADR-0004). Cannot start tomorrow's appointment today.                                                                    |
 | Detection  | Audit log                  | Every status transition is recorded in `appointment_status_history` with actor, timestamp, and from/to status. Anomalous patterns (e.g. completing an appointment with no start) trigger alerts. |
 
 **Residual risk after controls:** Very Low
@@ -474,7 +474,7 @@ Every threat below is mapped to the boundary it attacks.
 
 **Boundary:** 3, 5
 **Actor:** Authenticated appointment party (patient or doctor) who subscribes to the `appointments` table directly through Supabase Realtime or the Supabase client SDK.
-**Attack:** The DRF serializer hides `telehealth_room_url` until `start_time - 15 min`, but Flutter also reads appointments directly via Supabase under RLS. Because the base RLS policy only checks party membership, the URL would be readable hours before the appointment. Leaked URL + room token can be joined by third parties.
+**Attack:** The DRF serializer hides `telehealth_room_url` until `start_at - 15 min`, but Flutter also reads appointments directly via Supabase under RLS. Because the base RLS policy only checks party membership, the URL would be readable hours before the appointment. Leaked URL + room token can be joined by third parties.
 
 **Likelihood:** Medium (path exists by default; trivially exploited by any curious user)
 **Impact:** High — allows unauthorised observers to join a telehealth call.
@@ -485,7 +485,7 @@ Every threat below is mapped to the boundary it attacks.
 | ---------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Prevention | Client-facing view `v_appointments_safe` | All Flutter and Next.js reads of appointments go through `v_appointments_safe` (defined in veridian_schema.sql). The view nulls `telehealth_room_url` / `telehealth_patient_url` until 15 minutes before the slot start. |
 | Prevention | Revoke base-table SELECT from `authenticated` | `REVOKE SELECT ON appointments FROM authenticated;` — only the service role (Django) can read the raw table. `GRANT SELECT ON v_appointments_safe TO authenticated;`                    |
-| Prevention | DRF serializer symmetric gate          | The Django serializer applies the same `start_time - 15 min` gate, so both read paths behave identically.                                                                               |
+| Prevention | DRF serializer symmetric gate          | The Django serializer applies the same `start_at - 15 min` gate against the same stored instant (ADR-0004), so both read paths behave identically and cannot drift.                       |
 | Prevention | Token rotation                         | Daily.co room tokens are issued per user per session with a short expiry (≤ 2h). Even if leaked, the token is invalidated at room close.                                                 |
 | Detection  | Audit log on URL access                | Every `SELECT` on the DRF `meeting_url` endpoint is audit-logged with `actor_id` and `appointment_id`. Anomalous access patterns (non-party actor, bulk reads) trigger alert `telehealth_url_access_anomaly`. |
 
@@ -912,18 +912,27 @@ This appendix is the **canonical inventory**. Any table not listed here must not
 | `clinics`                | anon + authenticated | Clinic info                                | public (no RLS, all verified clinics visible)   |
 | `reviews`                | anon + authenticated | Review list on doctor profile              | `reviews_public_read`                           |
 | `v_appointments_safe`    | authenticated        | Appointments list + detail (URL-gated)     | view inherits base RLS on `appointments`        |
-| `health_timeline_entries`| authenticated        | Patient timeline, doctor consented read    | `timeline_patient_own`, `timeline_doctor_consent_read` |
 | `consent_grants`         | authenticated        | Consent management UI                      | `consent_patient_own`, `consent_doctor_read`    |
 | `consent_terms_acceptances` | authenticated     | Consent history for DPA SAR                | `cta_own_read`                                  |
 | `saved_doctors`          | authenticated        | Offline-synced favourites                  | `saved_doctors_own`                             |
 | `notification_preferences` | authenticated      | Notification settings UI                   | `notif_prefs_own`                               |
-| `bank_accounts`          | authenticated        | Payout setup UI (doctor)                   | `bank_accounts_own`                             |
+
+> **ADR-0003 (2026-07-01):** `health_timeline_entries` and `bank_accounts` were **removed**
+> from direct-read. Their content is app-level encrypted (per-patient key held only by
+> Django; account numbers returned as last-4 by the API), so a direct Supabase read returns
+> undecryptable bytes while enlarging the PHI/financial attack surface for no benefit. Both
+> are now Django-only, and `REVOKE SELECT ... FROM authenticated` is applied in
+> `veridian_schema.sql`. Authenticated direct-read (Tier 2 in ADR-0003) is conditional on the
+> ADR-0001 auth bridge making `auth.uid()` real, plus the hardened RLS (`TO authenticated`
+> + ownership `USING` **and** `WITH CHECK`).
 
 **NOT direct-read (Django-only):**
 
 - `appointments` (raw table — clients must use `v_appointments_safe`)
+- `health_timeline_entries` (encrypted PHI; content undecryptable client-side — ADR-0003)
+- `bank_accounts` (encrypted financial; API returns last-4 only — ADR-0003)
 - `payment_transactions`, `payouts` (financial, DRF endpoint only)
-- `audit_log`, `refresh_token_blocklist` (internal)
+- `audit_log`, `refresh_token_blocklist`, `idempotency_keys` (internal)
 - `doctor_profiles.profile_embedding` (VECTOR column — expose via search endpoint only)
 - `users` (exposed only through DRF `/me` and the doctor profile join)
 
