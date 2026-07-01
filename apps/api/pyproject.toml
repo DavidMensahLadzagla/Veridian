@@ -1,0 +1,49 @@
+[project]
+name = "veridian-api"
+version = "0.1.0"
+description = "Veridian Django REST API"
+requires-python = ">=3.12"
+dependencies = [
+    "Django>=5.0,<5.2",
+    "djangorestframework>=3.15",
+    "djangorestframework-simplejwt[crypto]>=5.3",
+    "psycopg[binary]>=3.1",
+    "dj-database-url>=2.1",
+    "redis>=5.0",
+    "django-redis>=5.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-django>=4.8",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "django-stubs[compatible-mypy]>=5.0",
+    "factory_boy>=3.3",
+    "faker>=25.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "DJ", "C4"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["mypy_django_plugin.main"]
+warn_unused_ignores = true
+disallow_untyped_defs = true
+exclude = ["migrations/"]
+
+[tool.django-stubs]
+django_settings_module = "config.settings.test"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py"]
+addopts = "--cov=. --cov-report=term-missing --no-cov-on-fail"

@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  api:
+    name: api (lint · type · test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+      - name: Lint (ruff)
+        run: ruff check .
+      - name: Format check (ruff)
+        run: ruff format --check .
+      - name: Type check (mypy)
+        run: mypy .
+      - name: Migrations are not drifting
+        run: python manage.py makemigrations --check --dry-run
+      - name: Test
+        run: pytest
+      # NOTE: once the 32-table schema lands (ADR-0006), add a Postgres service here and point
+      # DATABASE_URL at it — integration tests must run against Postgres, not sqlite.
