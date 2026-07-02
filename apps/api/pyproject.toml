@@ -11,6 +11,8 @@ dependencies = [
     "dj-database-url>=2.1",
     "redis>=5.0",
     "django-redis>=5.4",
+    "pgvector>=0.3",  # doctor_profiles.profile_embedding VECTOR(1536)
+    # PostGIS (clinics.location) also needs system libs GDAL/GEOS — see CI + README.
 ]
 
 [project.optional-dependencies]

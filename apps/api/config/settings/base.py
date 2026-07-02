@@ -37,10 +37,17 @@ ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.contenttypes",
+    "django.contrib.postgres",
+    "django.contrib.gis",  # PostGIS: clinics.location proximity search (needs GDAL/GEOS)
     "rest_framework",
-    # Veridian apps
+    # Veridian apps (bounded contexts)
     "core",
     "identity",
+    "notifications",
+    "payments",
+    "doctors",
+    "appointments",
+    "health_records",
 ]
 
 MIDDLEWARE = [
@@ -61,14 +68,16 @@ TEMPLATES = [
     },
 ]
 
-# --- Database (Supabase Postgres via PgBouncer) -------------------------------
-# `check` does not connect; runtime/tests require a reachable database.
+# --- Database (Supabase Postgres + PostGIS via PgBouncer) ---------------------
+# `check` does not connect; runtime/tests require a reachable PostGIS-enabled database.
 DATABASES = {
     "default": dj_database_url.parse(
         env("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/veridian"),
         conn_max_age=600,
     ),
 }
+# PostGIS backend (clinics.location is GEOGRAPHY(POINT, 4326)).
+DATABASES["default"]["ENGINE"] = "django.contrib.gis.db.backends.postgis"
 
 # --- Cache / Redis ------------------------------------------------------------
 CACHES = {

@@ -1,22 +1,14 @@
 """Test settings.
 
-BOOTSTRAP NOTE (Phase 0 only): uses in-memory SQLite + local-memory cache so the foundation
-test suite runs with zero external services. This is safe *only* while there are no models with
-Postgres-specific types. The moment the 32-table schema lands (ADR-0006), switch the test
-database to Postgres (CI already provisions a Postgres service) — integration tests must run
-against Postgres so RLS, triggers, JSONB/UUID/VECTOR/GEOGRAPHY behaviour is real.
+Runs against Postgres + PostGIS (NOT sqlite): the models use VECTOR, GEOGRAPHY, ARRAY, JSONB,
+and CHECK constraints that only Postgres honours, and RLS/triggers must be real (ADR-0006).
+CI provisions a postgis service and sets DATABASE_URL; locally, point DATABASE_URL at a
+postgis database. The cache is swapped to local-memory so tests need no Redis.
 """
 
 from .base import *  # noqa: F401,F403
 
 DEBUG = False
-
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": ":memory:",
-    },
-}
 
 CACHES = {
     "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"},

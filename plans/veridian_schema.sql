@@ -195,6 +195,7 @@ CREATE TABLE users (
     phone               VARCHAR(20) UNIQUE,                   -- E.164 format e.g. +233201234567
     phone_verified      BOOLEAN NOT NULL DEFAULT FALSE,
     email_verified      BOOLEAN NOT NULL DEFAULT FALSE,
+    password            VARCHAR(128),                         -- Django-managed (ADR-0006); NULL/unusable for OTP users, set only for platform_admin bootstrap
     role                user_role NOT NULL DEFAULT 'patient',
     full_name           VARCHAR(200) NOT NULL,
     preferred_language  VARCHAR(10) NOT NULL DEFAULT 'en',    -- BCP 47 e.g. 'en', 'tw' (Twi)

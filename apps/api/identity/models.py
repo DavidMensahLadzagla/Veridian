@@ -17,6 +17,8 @@ from typing import Any
 from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.db import models
 
+from core.models import TimestampedModel
+
 
 class UserRole(models.TextChoices):
     PATIENT = "patient", "Patient"
@@ -111,3 +113,53 @@ class User(AbstractBaseUser):
     @property
     def is_staff(self) -> bool:
         return self.role == UserRole.PLATFORM_ADMIN
+
+
+class UserAuthProvider(TimestampedModel):
+    """OAuth providers linked to a user (Google, Apple). Tokens encrypted at app level."""
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, db_column="user_id")
+    provider = models.CharField(max_length=50)
+    provider_uid = models.CharField(max_length=255)
+    access_token = models.TextField(null=True, blank=True)
+    refresh_token = models.TextField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "user_auth_providers"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider", "provider_uid"], name="uq_auth_provider_uid"
+            ),
+        ]
+
+
+class DeviceToken(TimestampedModel):
+    """FCM/APNS push tokens per device per user."""
+
+    class Platform(models.TextChoices):
+        IOS = "ios", "iOS"
+        ANDROID = "android", "Android"
+        WEB = "web", "Web"
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, db_column="user_id")
+    token = models.TextField(unique=True)
+    platform = models.CharField(max_length=10, choices=Platform.choices)
+    is_active = models.BooleanField(default=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "device_tokens"
+
+
+class RefreshTokenBlocklist(models.Model):
+    """Revoked JWT refresh tokens (Redis is primary; this is the durable fallback)."""
+
+    jti = models.UUIDField(primary_key=True)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, db_column="user_id")
+    revoked_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()  # purge cron deletes rows past this date
+
+    class Meta:
+        db_table = "refresh_token_blocklist"
+        indexes = [models.Index(fields=["expires_at"], name="idx_rtb_expires")]

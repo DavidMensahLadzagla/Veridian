@@ -1,6 +1,11 @@
 # ADR-0006 — Schema ownership: Django migrations are canonical; DDL delivered via RunSQL
 
-- **Status:** Proposed (blocks Phase 0 steps 5–7: applying the schema + the 32 models)
+- **Status:** Accepted (2026-07-01). Decisions: (1) **Django-migrations-canonical** — models
+  `managed=True`; RLS/triggers/functions/views/GRANT via `RunSQL` from versioned `.sql` files.
+  (2) **Enums = `TextChoices` + `CHECK` constraints, NOT native Postgres enums** (rationale
+  below — reversed from the initial lean). (3) **`users.password`** nullable, added to the
+  canonical schema. Models built per this ADR; migrations + RunSQL generated in a Postgres/
+  Django env (CI or local 3.13 + Postgres), which is the verification gate.
 - **Date:** 2026-07-01
 - **Deciders:** Lead engineer + project owner
 - **Related:** `plans/veridian_schema.sql`, BUILD_PROMPT §3.9 (append-only migrations,
@@ -67,7 +72,13 @@ and standard.
 ## Open questions for the owner
 
 1. Confirm **Django-migrations-canonical** (recommended) over SQL-canonical/`managed=False`.
-2. **Postgres enums vs `TextChoices`+CHECK** for the 18 enum types: native PG enums match the
-   DDL exactly but are painful to alter; `TextChoices` + a `CHECK` constraint is more
-   migration-friendly. I lean native PG enums for fidelity to the canonical schema. Your call.
-3. Confirm the nullable `users.password` reconciliation (vs. removing it).
+2. ~~Postgres enums vs `TextChoices`+CHECK~~ **DECIDED: `TextChoices` + `CHECK`.** On
+   reflection this beats native PG enums *because* of our own append-only-migration mandate:
+   altering a Postgres enum is a known trap — you cannot remove a value, and adding one has
+   transaction restrictions — so a schema that must evolve under "never edit an applied
+   migration" is far safer with `varchar + CHECK` (a CHECK is trivially replaced by a new
+   migration). RLS/queries compare enum values as strings either way (`status = 'available'`),
+   so there is no functional loss. The canonical `.sql` keeps native enums as *design
+   documentation*; the Django-managed runtime uses `varchar + CHECK`.
+3. **DECIDED: keep a nullable `users.password`** (added to `veridian_schema.sql`). Unused for
+   OTP users; set only for `platform_admin` bootstrap.
