@@ -22,9 +22,9 @@ class NotificationStatus(models.TextChoices):
 
 
 class NotificationTemplate(TimestampedModel):
-    # NOTE: canonical SQL declares `key` inline-UNIQUE AND UNIQUE(key,channel,language) — the
-    # inline one is a bug (it forbids multiple channels/languages per key). We keep only the
-    # composite. Flag to reconcile veridian_schema.sql.
+    # Uniqueness is the (key, channel, language) triple — one event key fans out to
+    # push/sms/email and multiple languages. (The redundant inline UNIQUE on `key` was
+    # removed from veridian_schema.sql; this model was always the composite-only form.)
     key = models.CharField(max_length=100)
     channel = models.CharField(max_length=10, choices=NotificationChannel.choices)
     language = models.CharField(max_length=10, default="en")

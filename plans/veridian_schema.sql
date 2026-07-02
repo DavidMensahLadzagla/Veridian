@@ -438,7 +438,7 @@ CREATE TRIGGER trg_audit_log_chain
 -- ---------------------------------------------------------------------------
 CREATE TABLE notification_templates (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    key             VARCHAR(100) NOT NULL UNIQUE,  -- e.g. 'appointment.confirmed'
+    key             VARCHAR(100) NOT NULL,          -- e.g. 'appointment.confirmed'
     channel         notification_channel NOT NULL,
     language        VARCHAR(10) NOT NULL DEFAULT 'en',
     subject         TEXT,                           -- email only
@@ -446,6 +446,10 @@ CREATE TABLE notification_templates (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
+    -- Uniqueness is the (key, channel, language) triple: one template per key
+    -- per channel per language. The `key` alone is intentionally NOT unique —
+    -- a single event key (e.g. 'appointment.confirmed') fans out to push + sms +
+    -- email and to multiple languages.
     UNIQUE (key, channel, language)
 );
 
