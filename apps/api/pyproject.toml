@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "veridian-api"
 version = "0.1.0"
@@ -25,6 +29,23 @@ dev = [
     "django-stubs[compatible-mypy]>=5.0",
     "factory_boy>=3.3",
     "faker>=25.0",
+]
+
+# Flat layout: the Django apps sit directly under apps/api/ as top-level
+# packages, so setuptools' auto-discovery can't guess a single package.
+# List them explicitly ("*" globs pull in each app's subpackages, e.g.
+# config.settings, identity.migrations).
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "config*",
+    "core*",
+    "identity*",
+    "doctors*",
+    "appointments*",
+    "health_records*",
+    "notifications*",
+    "payments*",
 ]
 
 [tool.ruff]
