@@ -73,5 +73,11 @@ jobs:
       - name: Migrations are not drifting
         run: python manage.py makemigrations --check --dry-run
 
+      # Hard gate for the platform_db RunSQL layer (ADR-0006/0007): proves the
+      # Supabase-compat shim + extensions + triggers + RLS/GRANT apply on a plain
+      # Postgres, independent of whether any test touches the DB.
+      - name: Migrate (full RunSQL layer)
+        run: python manage.py migrate --no-input
+
       - name: Test
         run: pytest

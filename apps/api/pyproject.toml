@@ -40,6 +40,7 @@ dev = [
 where = ["."]
 include = [
     "config*",
+    "platform_db*",
     "core*",
     "identity*",
     "doctors*",
@@ -48,6 +49,10 @@ include = [
     "notifications*",
     "payments*",
 ]
+
+# The RunSQL layer's text of record (ADR-0006) — must ship with the package.
+[tool.setuptools.package-data]
+platform_db = ["migrations/sql/*.sql"]
 
 [tool.ruff]
 line-length = 100

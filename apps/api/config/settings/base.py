@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "django.contrib.gis",  # PostGIS: clinics.location proximity search (needs GDAL/GEOS)
     "rest_framework",
     # Veridian apps (bounded contexts)
+    "platform_db",  # no-model app: RunSQL layer (shim/extensions/triggers/RLS) — ADR-0006/0007
     "core",
     "identity",
     "notifications",
