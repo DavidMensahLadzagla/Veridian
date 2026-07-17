@@ -145,6 +145,44 @@ A probe reproduced the failure and proved the fix end-to-end against a real Post
 - CI's plain Postgres now applies the full RLS/GRANT layer, so the isolation tests run on every
   PR instead of only against a live Supabase.
 
+## Addendum (2026-07-17): two findings from applying the layer end-to-end
+
+Implementing this ADR as `platform_db` migrations 0001–0005 and running the full
+`migrate` + behavioural probe against a fresh PostGIS+pgvector Postgres 17 surfaced two
+gaps invisible to review:
+
+1. **The shim needs a privilege baseline, not just roles + `auth.uid()`.** On Supabase,
+   `anon`/`authenticated`/`service_role` hold blanket grants on the `public` schema — that
+   baseline is what the canonical REVOKE block *subtracts from*. On plain Postgres the
+   shim-created roles had no table privileges at all, so every client-role query died on
+   table-level permission before any RLS policy was evaluated (the probe's
+   `SELECT … FROM users` as `authenticated` failed with `permission denied`, not with an
+   empty result). Fix: migration `0004_baseline_grants` emulates Supabase's baseline
+   (`GRANT ALL ON ALL TABLES/SEQUENCES/FUNCTIONS` + `ALTER DEFAULT PRIVILEGES` for the
+   three roles), sequenced **after** the model tables and **before** the RLS/REVOKE
+   migration. Idempotent and harmless on Supabase.
+
+2. **`security_invoker` + base-table REVOKE is a contradiction — the canonical spec had a
+   real bug.** `v_appointments_safe` was specified `security_invoker = true` while the
+   same spec REVOKEs the caller's SELECT on `appointments`: an invoker view executes with
+   the caller's privileges, so the view was unreadable by exactly the clients it exists
+   for — on Supabase and plain Postgres alike (threat-model I-4b endorses both halves of
+   the contradiction). Fix (applied to `plans/veridian_schema.sql`, the text of record):
+   the view is now **definer-style** with the patient/doctor ownership predicates
+   **embedded in its WHERE clause** (mirroring the two appointments read policies), plus
+   `security_barrier = true` against predicate-pushdown leaks, plus
+   `REVOKE ALL … FROM anon` (anon structurally sees zero rows anyway, since
+   `auth.uid()` is NULL). Verified: patient sees only their own appointment with the
+   telehealth URL NULLed outside the 15-minute window; the doctor sees only their
+   profile's appointments; anon is denied outright.
+   **Follow-up (owner-visible):** threat-model I-4b, ADR-0001's RLS-hardening item 4, and
+   any api-contract prose that says "security_invoker" still describe the old design and
+   need reconciling to "definer-style view with embedded ownership predicates".
+
+Everything above was verified live on 2026-07-17: full `migrate` from zero, the RLS
+filter/REVOKE/hash-chain/`updated_at` probes, definer-view scoping for patient, doctor,
+and anon, and Django's test-database creation (pytest) applying the entire layer.
+
 ## Open questions for the owner
 
 1. Confirm the **no-model `platform_db` app** as the home for these RunSQL migrations (vs.
