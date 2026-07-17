@@ -1370,8 +1370,18 @@ CREATE POLICY "appointments_doctor_read"
 -- View that nulls telehealth URLs until start_at - 15 min (absolute instant, ADR-0004).
 -- This is the ONLY path Flutter + Next.js are allowed to read from.
 -- The DRF serializer enforces the same gate on the Django path.
+--
+-- DEFINER-style on purpose (NOT security_invoker — empirical finding, 2026-07-17):
+-- a security_invoker view executes with the CALLER's privileges, and the caller's
+-- SELECT on the raw appointments table is REVOKED below — so an invoker view here
+-- is unreadable by clients, on Supabase and plain Postgres alike. The view instead
+-- runs as its owner (the migration role, which reads the base table) and EMBEDS the
+-- row-ownership predicates that the appointments RLS policies express, so it can
+-- never widen access: patients see own rows, doctors see their profile's rows,
+-- anon sees nothing (auth.uid() IS NULL). security_barrier stops user-supplied
+-- functions from leaking pre-filter rows via predicate pushdown.
 CREATE OR REPLACE VIEW v_appointments_safe
-WITH (security_invoker = true) AS
+WITH (security_barrier = true) AS
 SELECT
     a.id, a.slot_id, a.patient_id, a.doctor_profile_id, a.clinic_affiliation_id,
     a.status, a.booking_mode, a.consultation_fee, a.currency_code,
@@ -1396,12 +1406,20 @@ SELECT
     a.follow_up_recommended, a.follow_up_notes, a.follow_up_appointment_id,
     a.deleted_at, a.created_at, a.updated_at
 FROM appointments a
-JOIN slots s ON s.id = a.slot_id;
+JOIN slots s ON s.id = a.slot_id
+WHERE
+    -- Mirrors appointments_patient_read + appointments_doctor_read: the definer
+    -- view must scope rows itself because it does not run under the caller's RLS.
+    a.patient_id = (SELECT auth.uid())
+    OR a.doctor_profile_id IN (
+        SELECT id FROM doctor_profiles WHERE user_id = (SELECT auth.uid())
+    );
 
 COMMENT ON VIEW v_appointments_safe IS
-    'Client-facing view. Nulls telehealth URLs outside the 15-minute join window. '
-    'Flutter and Next.js clients must read appointments only through this view; '
-    'the raw appointments table is reserved for Django service-role writes.';
+    'Client-facing view (definer-style, ownership predicates embedded). Nulls '
+    'telehealth URLs outside the 15-minute join window. Flutter and Next.js '
+    'clients must read appointments only through this view; the raw appointments '
+    'table is reserved for Django service-role writes.';
 
 -- ---- health_timeline_entries: patient owns, doctor can read with consent ----
 -- ADR-0003: this table is Django-only. Content is AES-256-GCM ciphertext under a
@@ -1524,6 +1542,7 @@ CREATE POLICY "bank_accounts_own"
 -- ---------------------------------------------------------------------------
 REVOKE SELECT ON appointments             FROM anon, authenticated;
 GRANT  SELECT ON v_appointments_safe      TO   authenticated;        -- URL-gated view is the only client path (auth users only)
+REVOKE ALL    ON v_appointments_safe      FROM anon;                 -- hygiene: default privileges would otherwise grant it; predicate yields 0 rows for anon anyway
 REVOKE SELECT ON health_timeline_entries  FROM anon, authenticated;  -- Django-only; content is encrypted
 REVOKE SELECT ON bank_accounts            FROM anon, authenticated;  -- Django-only; last-4 via API
 
