@@ -42,7 +42,7 @@ class TimestampedModel(UUIDModel):
 
 
 class SoftDeleteQuerySet(models.QuerySet):
-    def alive(self) -> "SoftDeleteQuerySet":
+    def alive(self) -> SoftDeleteQuerySet:
         return self.filter(deleted_at__isnull=True)
 
     def soft_delete(self) -> int:
@@ -63,7 +63,7 @@ class SoftDeleteModel(TimestampedModel):
     deleted_at = models.DateTimeField(null=True, blank=True, default=None)
 
     objects = SoftDeleteManager()
-    all_objects = models.Manager()
+    all_objects = models.Manager()  # noqa: DJ012 — objects must stay first: Django's _default_manager is the first manager defined
 
     class Meta:
         abstract = True
@@ -149,6 +149,9 @@ class AuditLog(models.Model):
             models.Index(fields=["actor", "-created_at"]),
         ]
 
+    def __str__(self) -> str:
+        return f"{self.action} {self.table_name}:{self.record_id}"
+
 
 class IdempotencyStatus(models.TextChoices):
     IN_PROGRESS = "in_progress", "In progress"
@@ -160,9 +163,7 @@ class IdempotencyKey(models.Model):
 
     pk = models.CompositePrimaryKey("key", "user")
     key = models.UUIDField()
-    user = models.ForeignKey(
-        "identity.User", on_delete=models.CASCADE, db_column="user_id"
-    )
+    user = models.ForeignKey("identity.User", on_delete=models.CASCADE, db_column="user_id")
     endpoint = models.CharField(max_length=100)
     request_hash = models.CharField(max_length=64)
     status = models.CharField(
@@ -176,3 +177,6 @@ class IdempotencyKey(models.Model):
     class Meta:
         db_table = "idempotency_keys"
         indexes = [models.Index(fields=["created_at"], name="idx_idem_gc")]
+
+    def __str__(self) -> str:
+        return f"{self.key} [{self.status}] {self.endpoint}"

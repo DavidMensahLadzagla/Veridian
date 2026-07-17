@@ -99,9 +99,7 @@ class Clinic(SoftDeleteModel):
 
 
 class DoctorProfile(TimestampedModel):
-    user = models.OneToOneField(
-        "identity.User", on_delete=models.CASCADE, db_column="user_id"
-    )
+    user = models.OneToOneField("identity.User", on_delete=models.CASCADE, db_column="user_id")
     bio = models.TextField(null=True, blank=True)
     years_of_experience = models.SmallIntegerField(null=True, blank=True)
     license_number = models.CharField(max_length=100, null=True, blank=True)
@@ -113,8 +111,12 @@ class DoctorProfile(TimestampedModel):
     )
     verified_at = models.DateTimeField(null=True, blank=True)
     verified_by = models.ForeignKey(
-        "identity.User", null=True, blank=True, on_delete=models.SET_NULL,
-        db_column="verified_by", related_name="+",
+        "identity.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        db_column="verified_by",
+        related_name="+",
     )
     rejection_reason = models.TextField(null=True, blank=True)
     rating_avg = models.DecimalField(max_digits=3, decimal_places=2, default=0)
@@ -238,7 +240,10 @@ class AvailabilityTemplate(TimestampedModel):
         DoctorProfile, on_delete=models.CASCADE, db_column="doctor_profile_id"
     )
     clinic_affiliation = models.ForeignKey(
-        ClinicAffiliation, null=True, blank=True, on_delete=models.SET_NULL,
+        ClinicAffiliation,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         db_column="clinic_affiliation_id",
     )
     day_of_week = models.CharField(max_length=10, choices=DayOfWeek.choices)
@@ -272,11 +277,17 @@ class Slot(TimestampedModel):
         DoctorProfile, on_delete=models.CASCADE, db_column="doctor_profile_id"
     )
     clinic_affiliation = models.ForeignKey(
-        ClinicAffiliation, null=True, blank=True, on_delete=models.SET_NULL,
+        ClinicAffiliation,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         db_column="clinic_affiliation_id",
     )
     template = models.ForeignKey(
-        AvailabilityTemplate, null=True, blank=True, on_delete=models.SET_NULL,
+        AvailabilityTemplate,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         db_column="template_id",
     )
     slot_date = models.DateField()  # local wall-clock (display, filtering, uniqueness)
@@ -317,9 +328,7 @@ class Slot(TimestampedModel):
 
 
 class SavedDoctor(CreatedModel):
-    patient = models.ForeignKey(
-        "identity.User", on_delete=models.CASCADE, db_column="patient_id"
-    )
+    patient = models.ForeignKey("identity.User", on_delete=models.CASCADE, db_column="patient_id")
     doctor_profile = models.ForeignKey(
         DoctorProfile, on_delete=models.CASCADE, db_column="doctor_profile_id"
     )
@@ -327,7 +336,5 @@ class SavedDoctor(CreatedModel):
     class Meta:
         db_table = "saved_doctors"
         constraints = [
-            models.UniqueConstraint(
-                fields=["patient", "doctor_profile"], name="uq_saved_doctor"
-            ),
+            models.UniqueConstraint(fields=["patient", "doctor_profile"], name="uq_saved_doctor"),
         ]

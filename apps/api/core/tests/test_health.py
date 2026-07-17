@@ -5,7 +5,7 @@ from rest_framework.test import APIClient
 
 
 @pytest.mark.django_db
-def test_health_returns_healthy_when_db_and_cache_are_up():
+def test_health_returns_healthy_when_db_and_cache_are_up() -> None:
     # DB (test sqlite) and cache (locmem) are both available in the test environment.
     client = APIClient()
     response = client.get("/api/v1/health")
@@ -15,7 +15,7 @@ def test_health_returns_healthy_when_db_and_cache_are_up():
 
 
 @pytest.mark.django_db
-def test_health_is_public_no_auth_required():
+def test_health_is_public_no_auth_required() -> None:
     # No Authorization header — must still succeed (health is unauthenticated).
     response = APIClient().get("/api/v1/health")
     assert response.status_code == 200

@@ -53,17 +53,16 @@ class PreConsultationFormTemplate(TimestampedModel):
 
 
 class Appointment(SoftDeleteModel):
-    slot = models.ForeignKey(
-        "doctors.Slot", on_delete=models.RESTRICT, db_column="slot_id"
-    )
-    patient = models.ForeignKey(
-        "identity.User", on_delete=models.RESTRICT, db_column="patient_id"
-    )
+    slot = models.ForeignKey("doctors.Slot", on_delete=models.RESTRICT, db_column="slot_id")
+    patient = models.ForeignKey("identity.User", on_delete=models.RESTRICT, db_column="patient_id")
     doctor_profile = models.ForeignKey(
         "doctors.DoctorProfile", on_delete=models.RESTRICT, db_column="doctor_profile_id"
     )
     clinic_affiliation = models.ForeignKey(
-        "doctors.ClinicAffiliation", null=True, blank=True, on_delete=models.SET_NULL,
+        "doctors.ClinicAffiliation",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         db_column="clinic_affiliation_id",
     )
     status = models.CharField(
@@ -75,12 +74,19 @@ class Appointment(SoftDeleteModel):
     currency_code = models.CharField(max_length=3, default="GHS")
     platform_fee_pct = models.DecimalField(max_digits=5, decimal_places=2, default=8)
     payment_transaction = models.ForeignKey(
-        "payments.PaymentTransaction", null=True, blank=True, on_delete=models.SET_NULL,
-        db_column="payment_transaction_id", related_name="+",
+        "payments.PaymentTransaction",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        db_column="payment_transaction_id",
+        related_name="+",
     )
     # Pre-consultation
     form_template = models.ForeignKey(
-        PreConsultationFormTemplate, null=True, blank=True, on_delete=models.SET_NULL,
+        PreConsultationFormTemplate,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         db_column="form_template_id",
     )
     pre_consultation_responses = models.JSONField(default=dict)
@@ -98,21 +104,33 @@ class Appointment(SoftDeleteModel):
     cancelled_at = models.DateTimeField(null=True, blank=True)
     cancellation_reason = models.TextField(null=True, blank=True)
     cancelled_by = models.ForeignKey(
-        "identity.User", null=True, blank=True, on_delete=models.SET_NULL,
-        db_column="cancelled_by", related_name="+",
+        "identity.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        db_column="cancelled_by",
+        related_name="+",
     )
     # No-show
     no_show_marked_at = models.DateTimeField(null=True, blank=True)
     no_show_marked_by = models.ForeignKey(
-        "identity.User", null=True, blank=True, on_delete=models.SET_NULL,
-        db_column="no_show_marked_by", related_name="+",
+        "identity.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        db_column="no_show_marked_by",
+        related_name="+",
     )
     # Follow-up
     follow_up_recommended = models.BooleanField(null=True, blank=True)
     follow_up_notes = models.TextField(null=True, blank=True)
     follow_up_appointment = models.ForeignKey(
-        "self", null=True, blank=True, on_delete=models.SET_NULL,
-        db_column="follow_up_appointment_id", related_name="+",
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        db_column="follow_up_appointment_id",
+        related_name="+",
     )
 
     class Meta:
@@ -124,9 +142,7 @@ class Appointment(SoftDeleteModel):
             models.Index(fields=["status"], name="idx_appt_status"),
         ]
         constraints = [
-            models.CheckConstraint(
-                condition=Q(consultation_fee__gte=0), name="appt_fee_nonneg"
-            ),
+            models.CheckConstraint(condition=Q(consultation_fee__gte=0), name="appt_fee_nonneg"),
         ]
 
 
@@ -157,9 +173,7 @@ class Review(SoftDeleteModel):
     appointment = models.OneToOneField(
         Appointment, on_delete=models.RESTRICT, db_column="appointment_id"
     )
-    patient = models.ForeignKey(
-        "identity.User", on_delete=models.RESTRICT, db_column="patient_id"
-    )
+    patient = models.ForeignKey("identity.User", on_delete=models.RESTRICT, db_column="patient_id")
     doctor_profile = models.ForeignKey(
         "doctors.DoctorProfile", on_delete=models.RESTRICT, db_column="doctor_profile_id"
     )

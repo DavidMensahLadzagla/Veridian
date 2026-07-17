@@ -35,9 +35,7 @@ class PayoutStatus(models.TextChoices):
 
 
 class PaymentTransaction(SoftDeleteModel):
-    payer = models.ForeignKey(
-        "identity.User", on_delete=models.RESTRICT, db_column="payer_id"
-    )
+    payer = models.ForeignKey("identity.User", on_delete=models.RESTRICT, db_column="payer_id")
     appointment = models.ForeignKey(
         "appointments.Appointment",
         null=True,
@@ -111,7 +109,9 @@ class Payout(TimestampedModel):
         ]
         constraints = [
             models.CheckConstraint(
-                condition=Q(net_amount=F("gross_amount") - F("platform_fee") - F("tax_withheld_minor")),
+                condition=Q(
+                    net_amount=F("gross_amount") - F("platform_fee") - F("tax_withheld_minor")
+                ),
                 name="payout_net_check",
             ),
             models.CheckConstraint(

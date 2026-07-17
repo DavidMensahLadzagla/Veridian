@@ -69,9 +69,7 @@ class ScanStatus(models.TextChoices):
 
 
 class PatientProfile(TimestampedModel):
-    user = models.OneToOneField(
-        "identity.User", on_delete=models.CASCADE, db_column="user_id"
-    )
+    user = models.OneToOneField("identity.User", on_delete=models.CASCADE, db_column="user_id")
     blood_group = models.CharField(max_length=5, null=True, blank=True)
     genotype = models.CharField(max_length=5, null=True, blank=True)
     height_cm = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
@@ -97,15 +95,18 @@ class PatientProfile(TimestampedModel):
 class HealthTimelineEntry(SoftDeleteModel):
     """Encrypted at rest. content_encrypted/content_iv are AES-256-GCM ciphertext + nonce."""
 
-    patient = models.ForeignKey(
-        "identity.User", on_delete=models.RESTRICT, db_column="patient_id"
-    )
+    patient = models.ForeignKey("identity.User", on_delete=models.RESTRICT, db_column="patient_id")
     appointment = models.ForeignKey(
-        "appointments.Appointment", null=True, blank=True, on_delete=models.SET_NULL,
+        "appointments.Appointment",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         db_column="appointment_id",
     )
     authored_by = models.ForeignKey(
-        "identity.User", on_delete=models.RESTRICT, db_column="authored_by",
+        "identity.User",
+        on_delete=models.RESTRICT,
+        db_column="authored_by",
         related_name="+",
     )
     entry_type = models.CharField(max_length=20, choices=TimelineEntryType.choices)
@@ -114,7 +115,8 @@ class HealthTimelineEntry(SoftDeleteModel):
     content_iv = models.BinaryField()  # random 96-bit GCM nonce, unique per entry
     key_version = models.SmallIntegerField(default=1)
     visibility = models.CharField(
-        max_length=40, choices=TimelineVisibility.choices,
+        max_length=40,
+        choices=TimelineVisibility.choices,
         default=TimelineVisibility.PATIENT_ONLY,
     )
     attachment_keys = ArrayField(models.TextField(), default=list)
@@ -131,9 +133,7 @@ class HealthTimelineEntry(SoftDeleteModel):
 class ConsentTermsAcceptance(CreatedModel):
     """DPA 2012 consent evidence. NOT the same as ConsentGrant (doctor timeline access)."""
 
-    user = models.ForeignKey(
-        "identity.User", on_delete=models.CASCADE, db_column="user_id"
-    )
+    user = models.ForeignKey("identity.User", on_delete=models.CASCADE, db_column="user_id")
     consent_type = models.CharField(max_length=100, choices=ConsentTermsType.choices)
     version = models.CharField(max_length=20)
     granted = models.BooleanField()
@@ -154,9 +154,7 @@ class ConsentTermsAcceptance(CreatedModel):
 class ConsentGrant(TimestampedModel):
     """Patient → doctor consent to read the patient's timeline."""
 
-    patient = models.ForeignKey(
-        "identity.User", on_delete=models.CASCADE, db_column="patient_id"
-    )
+    patient = models.ForeignKey("identity.User", on_delete=models.CASCADE, db_column="patient_id")
     granted_to_doctor = models.ForeignKey(
         "doctors.DoctorProfile", on_delete=models.CASCADE, db_column="granted_to_doctor"
     )
@@ -178,9 +176,7 @@ class ConsentGrant(TimestampedModel):
 
 
 class Document(SoftDeleteModel):
-    owner = models.ForeignKey(
-        "identity.User", on_delete=models.CASCADE, db_column="owner_id"
-    )
+    owner = models.ForeignKey("identity.User", on_delete=models.CASCADE, db_column="owner_id")
     document_type = models.CharField(max_length=30, choices=DocumentType.choices)
     storage_key = models.TextField()
     file_name = models.CharField(max_length=500, null=True, blank=True)
@@ -188,8 +184,12 @@ class Document(SoftDeleteModel):
     file_size_bytes = models.IntegerField(null=True, blank=True)
     is_verified = models.BooleanField(default=False)
     verified_by = models.ForeignKey(
-        "identity.User", null=True, blank=True, on_delete=models.SET_NULL,
-        db_column="verified_by", related_name="+",
+        "identity.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        db_column="verified_by",
+        related_name="+",
     )
     verified_at = models.DateTimeField(null=True, blank=True)
     rejection_reason = models.TextField(null=True, blank=True)

@@ -46,7 +46,7 @@ class UserManager(BaseUserManager["User"]):
         role: str = UserRole.PATIENT,
         password: str | None = None,
         **extra: Any,
-    ) -> "User":
+    ) -> User:
         if not email and not phone:
             raise ValueError("A user must have either an email or a phone number.")
         user = self.model(
@@ -64,9 +64,7 @@ class UserManager(BaseUserManager["User"]):
         user.save(using=self._db)
         return user
 
-    def create_superuser(
-        self, *, email: str, full_name: str, password: str, **extra: Any
-    ) -> "User":
+    def create_superuser(self, *, email: str, full_name: str, password: str, **extra: Any) -> User:
         return self.create_user(
             email=email,
             full_name=full_name,
@@ -163,3 +161,6 @@ class RefreshTokenBlocklist(models.Model):
     class Meta:
         db_table = "refresh_token_blocklist"
         indexes = [models.Index(fields=["expires_at"], name="idx_rtb_expires")]
+
+    def __str__(self) -> str:
+        return f"jti={self.jti} (revoked {self.revoked_at})"
