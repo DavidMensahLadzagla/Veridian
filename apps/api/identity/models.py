@@ -3,10 +3,9 @@
 Auth is OTP + JWT (Termii/SimpleJWT), not passwords: users are created with an unusable
 password. Role-specific data (patient_profiles, doctor_profiles) lives in separate tables.
 
-NOTE (ADR-0006, pending): the canonical veridian_schema.sql `users` table has no `password`
-column, which Django's AbstractBaseUser requires. Reconciling Django-managed auth columns with
-the hand-written DDL is exactly what ADR-0006 (schema ownership) must decide before the 32
-models land. This model is the skeleton; field mapping is aligned to the schema otherwise.
+The `password` column comes from AbstractBaseUser: NOT NULL, holding a '!'-prefixed unusable
+marker for OTP users and a real hash only for platform_admin bootstrap (ADR-0006, reconciled
+in veridian_schema.sql). Field mapping is otherwise aligned 1:1 to the canonical schema.
 """
 
 from __future__ import annotations
