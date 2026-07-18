@@ -178,6 +178,10 @@ gaps invisible to review:
    **Follow-up (owner-visible):** threat-model I-4b, ADR-0001's RLS-hardening item 4, and
    any api-contract prose that says "security_invoker" still describe the old design and
    need reconciling to "definer-style view with embedded ownership predicates".
+   *Reconciled 2026-07-18:* ADR-0001 item 4 corrected (with a dated note), threat-model
+   I-4b's view control and Appendix A's inventory row now describe the definer-style
+   mechanism. The api-contract needed no change — its two mentions of the view are purely
+   behavioural (URL gating, "never the raw table") and were already accurate.
 
 Everything above was verified live on 2026-07-17: full `migrate` from zero, the RLS
 filter/REVOKE/hash-chain/`updated_at` probes, definer-view scoping for patient, doctor,

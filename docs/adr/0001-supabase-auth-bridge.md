@@ -109,8 +109,12 @@ The current policies work but have gaps that this ADR should fix in the same mig
 3. Never authorize on user-editable metadata. The app role lives in `public.users.role`
    (server-set) and is re-read server-side; it must never be trusted from a token claim the
    user could influence.
-4. `v_appointments_safe` already uses `security_invoker = true` (good). Ensure base-table
+4. `v_appointments_safe` must be a **definer-style** view with the patient/doctor ownership
+   predicates embedded in its `WHERE` clause, plus `security_barrier = true`. Ensure base-table
    `SELECT` is revoked from `authenticated` and only the view is granted (threat-model I-4b).
+   *(Corrected 2026-07-17: this item originally endorsed `security_invoker = true`, which
+   contradicts the base-table REVOKE — an invoker view runs with the caller's privileges, so
+   the view was unreadable by exactly the clients it exists for. See ADR-0007 addendum.)*
 
 ## Consequences
 

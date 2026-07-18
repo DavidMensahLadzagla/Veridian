@@ -483,7 +483,7 @@ Every threat below is mapped to the boundary it attacks.
 
 | Layer      | Control                               | Implementation                                                                                                                                                                         |
 | ---------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Prevention | Client-facing view `v_appointments_safe` | All Flutter and Next.js reads of appointments go through `v_appointments_safe` (defined in veridian_schema.sql). The view nulls `telehealth_room_url` / `telehealth_patient_url` until 15 minutes before the slot start. |
+| Prevention | Client-facing view `v_appointments_safe` | All Flutter and Next.js reads of appointments go through `v_appointments_safe` (defined in veridian_schema.sql). **Definer-style** view (ADR-0007 addendum, 2026-07-17): the patient/doctor ownership predicates are embedded in the view's `WHERE` clause (mirroring the two appointments read policies) and `security_barrier = true` blocks predicate-pushdown leaks — required because the base-table REVOKE below makes an invoker view unreadable. The view nulls `telehealth_room_url` / `telehealth_patient_url` until 15 minutes before the slot start, and `anon` is revoked outright. |
 | Prevention | Revoke base-table SELECT from `authenticated` | `REVOKE SELECT ON appointments FROM authenticated;` — only the service role (Django) can read the raw table. `GRANT SELECT ON v_appointments_safe TO authenticated;`                    |
 | Prevention | DRF serializer symmetric gate          | The Django serializer applies the same `start_at - 15 min` gate against the same stored instant (ADR-0004), so both read paths behave identically and cannot drift.                       |
 | Prevention | Token rotation                         | Daily.co room tokens are issued per user per session with a short expiry (≤ 2h). Even if leaked, the token is invalidated at room close.                                                 |
@@ -911,7 +911,7 @@ This appendix is the **canonical inventory**. Any table not listed here must not
 | `clinic_affiliations`    | anon + authenticated | Doctor → clinic join                       | piggybacks on doctor_profile_public_read        |
 | `clinics`                | anon + authenticated | Clinic info                                | public (no RLS, all verified clinics visible)   |
 | `reviews`                | anon + authenticated | Review list on doctor profile              | `reviews_public_read`                           |
-| `v_appointments_safe`    | authenticated        | Appointments list + detail (URL-gated)     | view inherits base RLS on `appointments`        |
+| `v_appointments_safe`    | authenticated        | Appointments list + detail (URL-gated)     | definer-style view: ownership predicates in view `WHERE` (ADR-0007 addendum) |
 | `consent_grants`         | authenticated        | Consent management UI                      | `consent_patient_own`, `consent_doctor_read`    |
 | `consent_terms_acceptances` | authenticated     | Consent history for DPA SAR                | `cta_own_read`                                  |
 | `saved_doctors`          | authenticated        | Offline-synced favourites                  | `saved_doctors_own`                             |
