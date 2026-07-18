@@ -35,6 +35,24 @@ Access tokens expire after **15 minutes**. Refresh tokens expire after **30 days
 
 Web clients receive the refresh token as an HttpOnly, Secure, SameSite=Lax cookie. Mobile clients store it in `flutter_secure_storage`.
 
+The access token is a Supabase-compatible RS256 JWT (see **ADR-0001**): Django is registered as a Supabase third-party auth issuer via its JWKS endpoint. The token carries `sub = users.id` (becomes `auth.uid()` in RLS), `role = "authenticated"` (the Postgres role — never the app role), `aud = "authenticated"`, and a separate `user_role` claim for the application role. The same token authenticates both Django API calls and permitted direct Supabase reads.
+
+### Idempotency
+
+Mutating endpoints that the Flutter offline queue can replay (`POST /appointments`, `POST /appointments/{id}/cancel`, `POST /appointments/{id}/reschedule`, and any future queueable mutation) accept an idempotency key (see **ADR-0002**):
+
+```
+X-Idempotency-Key: <uuid>
+```
+
+Semantics:
+
+- The key is **required** from the mobile client on replayable mutations; the server treats its absence as "no dedup".
+- A replay with a **completed** key returns the **original** response (same status code and body) — the operation is not re-executed. A double-booking retry after a lost response therefore produces exactly one appointment.
+- A replay while the original is still running returns `409 IDEMPOTENCY_IN_PROGRESS` with `Retry-After`.
+- Reusing a key with a **different** request body returns `422 IDEMPOTENCY_KEY_REUSED`.
+- Keys are scoped per user and retained 7 days (exceeds every offline-queue staleness window).
+
 ### Error Envelope
 
 Every error, regardless of HTTP status code, returns this shape:
@@ -91,12 +109,13 @@ All timestamps are ISO 8601 UTC strings: `"2025-06-15T09:00:00Z"`. Dates are `YY
 
 ### Supabase Direct Access
 
-Clients may read certain public data directly from Supabase (bypassing Django) for performance:
+Clients read a **defined subset** of tables directly from Supabase (bypassing Django) for latency and Realtime. The **authoritative inventory is threat-model Appendix A**, scoped by ADR-0003:
 
-- Available slot availability (via Supabase Realtime subscription)
-- Doctor profile embedding search (via Supabase pgvector RPC)
+- **Tier 1 — anon + authenticated (public):** `slots` (incl. Realtime availability), `doctor_profiles` (minus the `profile_embedding` column), `doctor_specializations`, `doctor_languages`, `clinic_affiliations`, `clinics`, `reviews`. Doctor embedding search is exposed via a Supabase pgvector RPC.
+- **Tier 2 — authenticated, non-PHI:** `v_appointments_safe` (URL-gated view — never the raw `appointments` table), `consent_grants`, `consent_terms_acceptances`, `saved_doctors`, `notification_preferences`.
+- **Django-only (NOT direct-read):** `health_timeline_entries` and `bank_accounts` (app-level encrypted — a direct read is undecryptable and is `REVOKE`d from `authenticated`), plus `appointments` (raw), `payment_transactions`, `payouts`, `audit_log`, `idempotency_keys`, `users`.
 
-All writes and business-logic reads go through the Django API.
+All writes and all business-logic reads (including decrypted health timeline content) go through the Django API. Authenticated direct reads depend on the ADR-0001 auth bridge and the hardened RLS in `veridian_schema.sql`.
 
 ---
 
@@ -314,7 +333,7 @@ For pay-at-desk bookings, `payment` is `null` and appointment moves directly to 
 | Doctor    | Any time                               | Full refund always                  |
 | Platform  | Any time                               | Full refund always                  |
 
-**Telehealth URL visibility rule:** `telehealth_patient_url` is only populated in the `AppointmentFull` response when `NOW() >= slot.start_time - 15 minutes`. This is enforced at the serializer level, not the database level.
+**Telehealth URL visibility rule:** `telehealth_patient_url` is only populated in the `AppointmentFull` response when `NOW() >= slot.start_at - 15 minutes` (`slot.start_at` is the authoritative absolute instant — ADR-0004). This is enforced at **both** the DRF serializer AND the database `v_appointments_safe` view (the only path direct Supabase reads may use), so the two read paths compare the same stored instant and cannot drift (threat-model I-4b).
 
 ---
 

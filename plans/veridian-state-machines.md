@@ -128,12 +128,12 @@ Actor:        doctor
 Guard:
   - appointment.status = 'confirmed'
   - request.user.id = appointment.doctor_profile.user_id
-  - NOW() >= slot.start_time - 30 minutes  (cannot start too early)
-  - NOW() <= slot.start_time + slot_duration + 60 minutes  (cannot start too late)
+  - NOW() >= slot.start_at - 30 minutes  (cannot start too early; slot.start_at is the absolute instant, ADR-0004)
+  - NOW() <= slot.start_at + slot_duration + 60 minutes  (cannot start too late)
 Action:
   1. SET appointment.status = 'in_progress'
   2. SET appointment.actual_start_time = NOW()
-  3. SET appointment.estimated_wait_minutes = MAX(0, (NOW() - slot.start_time).minutes)
+  3. SET appointment.estimated_wait_minutes = MAX(0, (NOW() - slot.start_at).minutes)
   4. INSERT appointment_status_history (from='confirmed', to='in_progress', actor=doctor)
 Side effects (async, Celery):
   - If booking_mode = 'telehealth':
@@ -290,7 +290,7 @@ Actor:        doctor
 Guard:
   - appointment.status = 'confirmed'
   - request.user.id = appointment.doctor_profile.user_id
-  - NOW() >= slot.start_time + slot_duration_minutes  (slot has passed)
+  - NOW() >= slot.start_at + slot_duration_minutes  (slot has passed; absolute instant, ADR-0004)
 Action:
   1. SET appointment.status = 'no_show_patient'
   2. SET appointment.no_show_marked_at = NOW()
@@ -313,7 +313,7 @@ Actor:        platform_admin
 Guard:
   - appointment.status = 'confirmed'
   - request.user.role = 'platform_admin'
-  - NOW() >= slot.start_time + slot_duration_minutes
+  - NOW() >= slot.start_at + slot_duration_minutes  (absolute instant, ADR-0004)
 Action:
   1. SET appointment.status = 'no_show_doctor'
   2. SET appointment.no_show_marked_at = NOW()
@@ -341,7 +341,7 @@ Guard:
   - new_slot.status = 'available'
   - new_slot.slot_date >= TODAY
   - new_slot.doctor_profile_id = appointment.doctor_profile_id
-  - If patient: NOW() < slot.start_time - cancellation_free_window (within rescheduling window)
+  - If patient: NOW() < slot.start_at - cancellation_free_window (within rescheduling window; absolute instant, ADR-0004)
   - If doctor: any time before slot.start_time
 Action (atomic):
   1. SELECT new_slot FOR UPDATE — abort if status ≠ 'available'
@@ -435,7 +435,11 @@ Guard:
   - slot_date >= TODAY
   - UNIQUE(doctor_profile_id, slot_date, start_time) not violated
 Action:
-  - INSERT slot with status='available', confidence_score=1.0
+  - Resolve tz = clinic.timezone (in-person) else doctor's users.timezone (telehealth-only)
+  - Compute start_at / end_at as absolute instants from (slot_date, start_time/end_time) in tz
+    (DST-safe via the IANA zone for that future date) — ADR-0004
+  - INSERT slot with status='available', confidence_score seeded from doctor's rolling score,
+    start_at, end_at
 ```
 
 #### S2: `available → reserved`
@@ -972,7 +976,11 @@ def start_appointment(doctor_user, appointment_id):
             message=f'Cannot start appointment in status: {appointment.status}'
         )
     now = timezone.now()
-    slot_start = datetime.combine(appointment.slot.slot_date, appointment.slot.start_time, tzinfo=UTC)
+    # ADR-0004: slot.start_at is the authoritative tz-aware instant, computed at generation
+    # from the clinic's IANA timezone (or the doctor's users.timezone for telehealth-only
+    # slots). Never rebuild it from slot_date + start_time — that is tz-naive and only correct
+    # at UTC+0, and would drift from the v_appointments_safe view's gate.
+    slot_start = appointment.slot.start_at
     if now < slot_start - timedelta(minutes=30):
         raise InvalidStateTransitionError(code='TOO_EARLY_TO_START')
     if now > slot_start + timedelta(minutes=appointment.slot_duration + 60):
@@ -1009,19 +1017,17 @@ def handle_paystack_charge_success(payload):
 
 ### Flutter state management
 
-On the mobile client, appointment status is mirrored in the local Drift database. Supabase Realtime pushes status changes. The Riverpod `AppointmentNotifier` listens and updates local state:
+On the mobile client, appointment status is mirrored in the local Drift database. Status changes propagate via **FCM push + pull-sync**, not Supabase Realtime: direct SELECT on the raw `appointments` table is revoked from `authenticated` (ADR-0003 / threat-model I-4b), and Realtime Postgres Changes is table-level (it cannot watch the `v_appointments_safe` view). On a status-change push, the Riverpod `AppointmentNotifier` pulls the authoritative row from Django and updates local state, skipping any row the offline queue still owns:
 
 ```dart
-// The notifier reacts to realtime events
-_supabase.from('appointments')
-  .stream(primaryKey: ['id'])
-  .eq('patient_id', currentUserId)
-  .listen((data) {
-    for (final row in data) {
-      _localDb.upsertAppointment(AppointmentMapper.fromJson(row));
-    }
-    ref.invalidateSelf();
-  });
+// The notifier reacts to an appointment push (not a Supabase stream)
+Future<void> onAppointmentPush(String appointmentId) async {
+  final row = await _api.appointments.get(appointmentId); // v_appointments_safe path
+  final local = await _localDb.getAppointment(appointmentId);
+  if (local?.syncStatus == SyncStatus.pending) return;     // offline queue owns this row
+  await _localDb.upsertAppointment(AppointmentMapper.fromJson(row));
+  ref.invalidateSelf();
+}
 ```
 
 ---

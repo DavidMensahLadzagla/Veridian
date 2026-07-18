@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "veridian-api"
+version = "0.1.0"
+description = "Veridian Django REST API"
+requires-python = ">=3.13"
+dependencies = [
+    "Django>=5.2,<6.0",  # 5.2 LTS — supports Python 3.10–3.14 (3.14 since 5.2.8)
+    "djangorestframework>=3.15",
+    "djangorestframework-simplejwt[crypto]>=5.3",
+    "psycopg[binary]>=3.1",
+    "dj-database-url>=2.1",
+    "redis>=5.0",
+    "django-redis>=5.4",
+    "pgvector>=0.3",  # doctor_profiles.profile_embedding VECTOR(1536)
+    # PostGIS (clinics.location) also needs system libs GDAL/GEOS — see CI + README.
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-django>=4.8",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "django-stubs[compatible-mypy]>=5.0",
+    "djangorestframework-stubs>=3.15",
+    "factory_boy>=3.3",
+    "faker>=25.0",
+]
+
+# Flat layout: the Django apps sit directly under apps/api/ as top-level
+# packages, so setuptools' auto-discovery can't guess a single package.
+# List them explicitly ("*" globs pull in each app's subpackages, e.g.
+# config.settings, identity.migrations).
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "config*",
+    "platform_db*",
+    "core*",
+    "identity*",
+    "doctors*",
+    "appointments*",
+    "health_records*",
+    "notifications*",
+    "payments*",
+]
+
+# The RunSQL layer's text of record (ADR-0006) — must ship with the package.
+[tool.setuptools.package-data]
+platform_db = ["migrations/sql/*.sql"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["migrations"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "DJ", "C4"]
+# DJ001 (avoid null=True on Char/TextField): deliberately violated. The models
+# mirror the canonical DDL's nullability 1:1 (ADR-0006 schema parity); the DDL
+# uses NULL for absent text, and NULL-vs-'' drift between environments would
+# break the parity check and the RLS/view predicates that test IS NULL.
+ignore = ["DJ001"]
+
+[tool.mypy]
+python_version = "3.13"
+plugins = ["mypy_django_plugin.main"]
+warn_unused_ignores = true
+disallow_untyped_defs = true
+exclude = ["migrations/"]
+
+[tool.django-stubs]
+django_settings_module = "config.settings.test"
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+python_files = ["test_*.py"]
+addopts = "--cov=. --cov-report=term-missing --no-cov-on-fail"

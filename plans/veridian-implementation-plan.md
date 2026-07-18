@@ -121,7 +121,7 @@ Every table inherits from `TimestampedModel` (`created_at`, `updated_at`) and `S
 | `doctor_profiles`         | FK to user, specializations (array), languages (array), bio, `consultation_fee_pesewas`, rating_avg, rating_count, verification_status, license_number            |
 | `clinic_affiliations`     | doctor_id, clinic_id, days_available (array), consulting_room                                                                                                     |
 | `availability_templates`  | doctor_id, day_of_week, start_time, end_time, slot_duration_minutes, booking_mode (`in_person                                                                     | telehealth | either`), is_active |
-| `slots`                   | generated from templates, date + start_time + end_time, status (`available                                                                                        | reserved   | booked              | blocked`), confidence_score (0.0–1.0), doctor_id, clinic_id |
+| `slots`                   | generated from templates, date + start_time + end_time (local) + start_at/end_at (absolute instant, ADR-0004), status (`available                                                                                        | reserved   | booked              | blocked`), confidence_score (0.0–1.0), doctor_id, clinic_id |
 | `appointments`            | slot_id, patient_id, doctor_id, status (state machine), booking_mode, pre_consultation_form (JSONB), patient_notes, estimated_wait_minutes, actual_start/end_time |
 | `health_timeline_entries` | patient_id, linked_appointment_id (nullable), entry_type, content (JSONB), authored_by, visibility, attachments (array of storage keys)                           |
 | `consent_grants`          | patient_id, granted_to_doctor_id, scope, granted_at, expires_at, revoked_at                                                                                       |
@@ -130,7 +130,7 @@ Every table inherits from `TimestampedModel` (`created_at`, `updated_at`) and `S
 
 Supabase provides PostgreSQL, Realtime, Storage, and the Auth layer for direct client access (Flutter reads/writes that bypass Django for performance).
 
-**Realtime subscriptions** used for: slot availability updates, appointment status changes, in-app notifications.
+**Realtime subscriptions** used for **slot availability updates only** (the `slots` table is public and in the direct-read inventory). Appointment status changes and in-app notifications propagate via **FCM push + pull-sync**, not Realtime — the raw `appointments` table SELECT is revoked from `authenticated` and Realtime is table-level, so it cannot watch the `v_appointments_safe` view (ADR-0003 / threat-model I-4b).
 
 #### Row Level Security Examples
 
@@ -497,6 +497,21 @@ A lightweight feature flag system (stored in Redis, manageable via Django Admin)
 
 ## Part 7 — Phased Development Roadmap
 
+> **Launch cut-line (ADR-0005 — authoritative for scope).** v1.0 ships the core booking loop
+> **online-first** on web + mobile: auth, doctor KYC, profiles/availability/slots, **SQL search
+> (not semantic)**, the atomic + idempotent booking transaction (Paystack + pay-at-desk), the
+> full appointment state machine, encrypted health timeline + consent, notifications, payouts +
+> WHT — **in-person consultations only**. Deferred to fast-follow: **telehealth → v1.1**;
+> **the offline write/sync engine → v1.2** (mobile v1.0 is **read-through cache only** — no
+> operation queue, conflict resolver, or offline booking); **semantic search → v1.3**;
+> Stripe/international + family accounts → v1.x; **multi-vertical → v2+**. All security and
+> compliance controls are **non-cuttable** and ship in v1.0. The compliance track (DPC, DPO,
+> DPAs, legal review, KYB, DPIA, pen test) runs **in parallel from week 1** and is the real
+> pacing item. v1.0 coverage bar: **100% on critical-path modules (booking, payments, auth,
+> encryption, consent, state machine), ~80% elsewhere**; deferred modules carry their targets
+> when they ship. The week-by-week below describes the *full* program; items tagged
+> "(deferred — ADR-0005)" are not in the v1.0 launch set.
+
 ### Phase 0 — Foundation (Weeks 1–3)
 
 Set up the monorepo. Initialize Django project with core app, identity app, custom user model, JWT auth. Initialize Next.js with App Router, Tailwind CSS v4, shadcn/ui, TanStack Query. Initialize Flutter with Riverpod, go_router, Drift, dio. Configure Supabase project (tables, RLS, Storage buckets). Set up GitHub Actions for lint, test, and build on every PR. Deploy skeleton apps to Railway (Django) and Vercel (Next.js). Establish database migration discipline (never raw SQL in production — always Django migrations).
@@ -529,11 +544,11 @@ Set up the monorepo. Initialize Django project with core app, identity app, cust
 
 **Weeks 12–13:** Notifications, appointment management, post-booking UX. Full notification pipeline (Celery tasks, FCM, Termii SMS, email). Patient appointment dashboard. Doctor appointment dashboard. Reschedule and cancellation flows with fee logic.
 
-**Week 14:** Telehealth integration (Daily.co), health timeline (patient entry), reviews and ratings.
+**Week 14:** Health timeline (patient entry), reviews and ratings. *(Telehealth integration (Daily.co) deferred to v1.1 — ADR-0005.)*
 
 ### Phase 2 — Polish & Launch Readiness (Weeks 15–18)
 
-Doctor earnings dashboard and Paystack Transfer payouts. Platform Admin panel. Semantic search (pgvector, embedding pipeline). Performance optimization (query analysis, Redis caching for doctor profiles and slot availability). Offline sync hardening on Flutter. Accessibility audit (web: WCAG 2.1 AA). Security audit (OWASP Top 10 review, penetration testing). App store submission preparation.
+Doctor earnings dashboard and Paystack Transfer payouts. Platform Admin panel. Performance optimization (query analysis, Redis caching for doctor profiles and slot availability). Accessibility audit (web: WCAG 2.1 AA). Security audit (OWASP Top 10 review, penetration testing). App store submission preparation. *(Semantic search deferred to v1.3; full offline sync engine to v1.2 — mobile v1.0 is read-through cache only — per ADR-0005.)*
 
 ### Phase 3 — Growth Features (Month 5+)
 

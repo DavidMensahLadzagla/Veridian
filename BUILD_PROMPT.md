@@ -70,7 +70,12 @@ Do not proceed past a gate without every item checked. Self-certification is not
 
 ### Phase 1 exit gate (before launch)
 
-- [ ] All test-strategy coverage targets hit (unit ≥ 90%, integration ≥ 80%, critical-path e2e 100%).
+> **Scope = the ADR-0005 v1.0 cut-line:** the core booking loop, **online-first**, **in-person
+> only**. Telehealth (v1.1), the offline write/sync engine (v1.2 — mobile v1.0 is read-through
+> cache only), and semantic search (v1.3) are **out of the launch gate**. Every item below
+> applies to the v1.0 surface; no security or compliance control is deferred.
+
+- [ ] Coverage per ADR-0005: **100% on critical-path modules** (booking, payments, auth, encryption, consent, appointment state machine) and **≥ 80% elsewhere** on the shipped surface; critical-path e2e 100%. Deferred modules carry their full targets when they ship.
 - [ ] Direct-read RLS test suite is 100% green and covers every table in Appendix A.
 - [ ] External penetration test commissioned; all P0/P1 findings fixed.
 - [ ] DPIA completed and signed off by the DPO.

@@ -1,0 +1,56 @@
+-- Reverse of 0004: drop policies and the safe view, disable RLS.
+-- Deliberately does NOT undo the REVOKEs: a downward migration must never
+-- silently re-open direct SELECT on appointments / health_timeline_entries /
+-- bank_accounts (PHI/financial). Re-granting is a conscious, manual act.
+DROP POLICY IF EXISTS "users_read_own" ON users;
+DROP POLICY IF EXISTS "users_update_own" ON users;
+DROP POLICY IF EXISTS "patient_profile_own" ON patient_profiles;
+DROP POLICY IF EXISTS "doctor_profile_public_read" ON doctor_profiles;
+DROP POLICY IF EXISTS "doctor_profile_own_all" ON doctor_profiles;
+DROP POLICY IF EXISTS "slots_public_read" ON slots;
+DROP POLICY IF EXISTS "slots_doctor_own" ON slots;
+DROP POLICY IF EXISTS "appointments_patient_read" ON appointments;
+DROP POLICY IF EXISTS "appointments_doctor_read" ON appointments;
+DROP POLICY IF EXISTS "timeline_patient_own" ON health_timeline_entries;
+DROP POLICY IF EXISTS "timeline_doctor_consent_read" ON health_timeline_entries;
+DROP POLICY IF EXISTS "payments_payer_read" ON payment_transactions;
+DROP POLICY IF EXISTS "reviews_public_read" ON reviews;
+DROP POLICY IF EXISTS "reviews_patient_own" ON reviews;
+DROP POLICY IF EXISTS "saved_doctors_own" ON saved_doctors;
+DROP POLICY IF EXISTS "cta_own_read" ON consent_terms_acceptances;
+DROP POLICY IF EXISTS "cta_own_insert" ON consent_terms_acceptances;
+DROP POLICY IF EXISTS "consent_patient_own" ON consent_grants;
+DROP POLICY IF EXISTS "consent_doctor_read" ON consent_grants;
+DROP POLICY IF EXISTS "documents_owner" ON documents;
+DROP POLICY IF EXISTS "notif_prefs_own" ON notification_preferences;
+DROP POLICY IF EXISTS "telehealth_patient_read" ON telehealth_sessions;
+DROP POLICY IF EXISTS "telehealth_doctor_read" ON telehealth_sessions;
+DROP POLICY IF EXISTS "bank_accounts_own" ON bank_accounts;
+DROP VIEW IF EXISTS v_appointments_safe;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;
+ALTER TABLE DISABLE ROW LEVEL SECURITY;

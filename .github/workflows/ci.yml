@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  api:
+    name: api (lint · type · test)
+    runs-on: ubuntu-latest
+    # 3.13 is the pinned runtime (Django 5.2 LTS). 3.14 is a canary: it tracks whether the
+    # C-extension deps (psycopg, cryptography, GDAL/GEOS, pgvector) have 3.14 wheels yet, and
+    # is allowed to fail so it never blocks a merge.
+    continue-on-error: ${{ matrix.experimental || false }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13"]
+        include:
+          - python-version: "3.14"
+            experimental: true
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      DJANGO_SETTINGS_MODULE: config.settings.test
+      DJANGO_SECRET_KEY: ci-insecure-key-not-used-in-any-real-env
+      # Role/DB created below. SUPERUSER is required so migrations can CREATE EXTENSION
+      # postgis/vector and so the Django test runner can create the test_ database.
+      DATABASE_URL: postgres://veridian:veridian@localhost:5432/veridian_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: System libs + Postgres extensions (GDAL/GEOS/PROJ, PostGIS, pgvector)
+        working-directory: .
+        run: |
+          set -euo pipefail
+          # PGDG repo carries the postgis + pgvector packages for the runner's Postgres.
+          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update
+          # GDAL/GEOS/PROJ for GeoDjango (loaded via ctypes at runtime, no python build).
+          sudo apt-get install -y --no-install-recommends binutils libproj-dev gdal-bin libgdal-dev
+          # PostGIS + pgvector for the preinstalled Postgres 16 cluster (port 5432).
+          # NOTE: prod is Postgres 15 on Supabase; CI runs 16. Acceptable minor drift — both
+          # ship the same extensions. Revisit if a 15-specific behaviour ever bites.
+          PG_MAJOR="$(pg_lsclusters -h | awk 'NR==1{print $1}')"
+          sudo apt-get install -y --no-install-recommends \
+            "postgresql-${PG_MAJOR}-postgis-3" "postgresql-${PG_MAJOR}-pgvector"
+          sudo systemctl start postgresql
+          sudo -u postgres psql -c "CREATE ROLE veridian LOGIN PASSWORD 'veridian' SUPERUSER CREATEDB;"
+          sudo -u postgres createdb -O veridian veridian_test
+
+      - name: Install (api + dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Format check (ruff)
+        run: ruff format --check .
+
+      - name: Type check (mypy)
+        run: mypy .
+
+      - name: Migrations are not drifting
+        run: python manage.py makemigrations --check --dry-run
+
+      # Hard gate for the platform_db RunSQL layer (ADR-0006/0007): proves the
+      # Supabase-compat shim + extensions + triggers + RLS/GRANT apply on a plain
+      # Postgres, independent of whether any test touches the DB.
+      - name: Migrate (full RunSQL layer)
+        run: python manage.py migrate --no-input
+
+      - name: Test
+        run: pytest
