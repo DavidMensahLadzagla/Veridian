@@ -47,6 +47,7 @@ erDiagram
         varchar phone
         bool phone_verified
         bool email_verified
+        varchar password
         user_role role
         varchar full_name
         varchar preferred_language

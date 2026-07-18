@@ -3,8 +3,9 @@
 - **Status:** Accepted (2026-07-01). Decisions: (1) **Django-migrations-canonical** — models
   `managed=True`; RLS/triggers/functions/views/GRANT via `RunSQL` from versioned `.sql` files.
   (2) **Enums = `TextChoices` + `CHECK` constraints, NOT native Postgres enums** (rationale
-  below — reversed from the initial lean). (3) **`users.password`** nullable, added to the
-  canonical schema. Models built per this ADR; migrations + RunSQL generated in a Postgres/
+  below — reversed from the initial lean). (3) **`users.password`** added to the
+  canonical schema — NOT NULL in practice, see the 2026-07-18 correction under
+  "The `users.password` reconciliation". Models built per this ADR; migrations + RunSQL generated in a Postgres/
   Django env (CI or local 3.13 + Postgres), which is the verification gate.
 - **Date:** 2026-07-01
 - **Deciders:** Lead engineer + project owner
@@ -58,6 +59,14 @@ OTP users (`set_unusable_password()`), usable only for `platform_admin` bootstra
 `password` and store the admin bootstrap secret elsewhere — but a nullable column is simplest
 and standard.
 
+*(Corrected 2026-07-18, after the migrations were generated and run: "nullable" was wrong in
+one detail. `AbstractBaseUser` declares `password` as a plain `CharField`, so the generated
+column is **NOT NULL** — Django's `set_unusable_password()` stores a `'!'`-prefixed random
+marker string, never NULL. The behaviour is exactly as intended (OTP users cannot log in with
+a password; only `platform_admin` bootstrap gets a real hash); only the mechanism differs:
+unusable-marker-in-NOT-NULL-column rather than NULL. `veridian_schema.sql` and
+`veridian-database-schema.md` now reflect this.)*
+
 ## Consequences
 
 - The 32 models are written `managed=True`, mapping 1:1 to the schema (`db_table`, exact field
@@ -80,5 +89,6 @@ and standard.
    migration). RLS/queries compare enum values as strings either way (`status = 'available'`),
    so there is no functional loss. The canonical `.sql` keeps native enums as *design
    documentation*; the Django-managed runtime uses `varchar + CHECK`.
-3. **DECIDED: keep a nullable `users.password`** (added to `veridian_schema.sql`). Unused for
-   OTP users; set only for `platform_admin` bootstrap.
+3. **DECIDED: keep `users.password`** (added to `veridian_schema.sql`). Unused for
+   OTP users; set only for `platform_admin` bootstrap. *(2026-07-18: lands as NOT NULL with
+   unusable markers, not nullable — see the correction above; decision unchanged in substance.)*
